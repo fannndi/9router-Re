@@ -183,6 +183,17 @@ export const MODEL_CAPABILITIES = {
   "space-bunny-free":  { vision: true, videoInput: true, reasoning: true, thinkingFormat: "openai", contextWindow: 1048576, maxOutput: 524288 },
   "space-bunny":       { vision: true, videoInput: true, reasoning: true, thinkingFormat: "openai", contextWindow: 1048576, maxOutput: 524288 },
   "big-pickle":        { reasoning: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 32000 },
+
+  // Zen free-tier limits pinned at their models.dev values (checked 2026-10-16).
+  // The generic patterns mis-size these: `*step-*` says 128k (step-5 is 1M)
+  // and the "-free" DeepSeek/MiMo ids are capped at 200k while their family
+  // patterns say 1M. Flags are kept exactly as the patterns resolved them.
+  "step-5-preview-free":          { reasoning: true, thinkingFormat: "step", contextWindow: 1000000, maxOutput: 65536 },
+  "nemotron-3.5-super-vl-free":   { vision: true, reasoning: true, contextWindow: 1048576, maxOutput: 131072 },
+  "nemotron-3.5-lightning-free":  { reasoning: true, contextWindow: 262144, maxOutput: 262144 },
+  "cat-jam-free":                 { contextWindow: 262144, maxOutput: 131072 },
+  "mimo-v2.6-flash-free":         { vision: true, audioInput: true, videoInput: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 32000 },
+  "deepseek-v4.1-flash-free":     { vision: true, reasoning: true, thinkingFormat: "deepseek", thinkingEffortSupported: true, contextWindow: 200000, maxOutput: 32000 },
   "exo-free":          { vision: true, reasoning: true, thinkingFormat: "openai", contextWindow: 1048576, maxOutput: 131072 },
   "fledge-alpha-free": { vision: true, reasoning: true, thinkingFormat: "openai", contextWindow: 1048576, maxOutput: 131072 },
   "longcat-2.0":             { reasoning: true, thinkingFormat: "openai", contextWindow: 1000000, maxOutput: 131072 },

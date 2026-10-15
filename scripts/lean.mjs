@@ -4362,6 +4362,52 @@ PHASES["pool-usage"] = {
   ],
 };
 
+// ─── zen-caps ──────────────────────────────────────────────────────────────
+// Pin the OpenCode Free (Zen) free-tier limits at their models.dev values and
+// make /v1/models actually publish them:
+//   - the generic patterns mis-size the Zen ids: `*step-*` says 128k while
+//     step-5-preview-free is 1M, and the "-free" DeepSeek/MiMo variants are
+//     capped at 200k although their family patterns say 1M
+//   - in this fork the DB holds no provider connections (OpenCode Free is a
+//     virtual no-auth connection), so /v1/models took the "DB unavailable"
+//     static branch and never emitted context_length/max_completion_tokens
+PHASES["zen-caps"] = {
+  title: "OpenCode Free limits: pin models.dev numbers + publish them on /v1/models",
+  patch: [
+    {
+      file: "open-sse/providers/capabilities.js",
+      find: `  "big-pickle":        { reasoning: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 32000 },\n`,
+      replace: `  "big-pickle":        { reasoning: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 32000 },
+
+  // Zen free-tier limits pinned at their models.dev values (checked 2026-10-16).
+  // The generic patterns mis-size these: \`*step-*\` says 128k (step-5 is 1M)
+  // and the "-free" DeepSeek/MiMo ids are capped at 200k while their family
+  // patterns say 1M. Flags are kept exactly as the patterns resolved them.
+  "step-5-preview-free":          { reasoning: true, thinkingFormat: "step", contextWindow: 1000000, maxOutput: 65536 },
+  "nemotron-3.5-super-vl-free":   { vision: true, reasoning: true, contextWindow: 1048576, maxOutput: 131072 },
+  "nemotron-3.5-lightning-free":  { reasoning: true, contextWindow: 262144, maxOutput: 262144 },
+  "cat-jam-free":                 { contextWindow: 262144, maxOutput: 131072 },
+  "mimo-v2.6-flash-free":         { vision: true, audioInput: true, videoInput: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 32000 },
+  "deepseek-v4.1-flash-free":     { vision: true, reasoning: true, thinkingFormat: "deepseek", thinkingEffortSupported: true, contextWindow: 200000, maxOutput: 32000 },
+`,
+      check: `"step-5-preview-free":          { reasoning: true`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `  if (connections.length === 0) {
+    // DB unavailable -> return static models, filtered by per-model kind`,
+      replace: `  // No usable connection at all -> static list. In this fork the DB holds no
+  // provider rows — OpenCode Free is a virtual no-auth connection — so the
+  // synthetic entries above are the normal case; counting them lets the
+  // per-provider loop below publish capabilities plus context_length /
+  // max_completion_tokens from the capability tables.
+  if (activeConnectionByProvider.size === 0) {
+    // DB unavailable -> return static models, filtered by per-model kind`,
+      check: `if (activeConnectionByProvider.size === 0) {`,
+    },
+  ],
+};
+
 function cmdAudit() {
   // Guards against the one bug class that silently no-ops a rule: a `check`
   // string that is already a substring of `find` (so the rule looks "applied"

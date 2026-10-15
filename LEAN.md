@@ -16,7 +16,7 @@ node scripts/lean.mjs audit             # fails when a rule can never apply (che
 ```
 
 Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-saver`,
-`sso`, `mitm-tunnel`, `providers`, `cosmetics`, `sweep`, `pool-obs`, `pool-usage`.
+`sso`, `mitm-tunnel`, `providers`, `cosmetics`, `sweep`, `pool-obs`, `pool-usage`, `zen-caps`.
 
 ## What the fork keeps
 
@@ -89,6 +89,35 @@ was deleted by another phase is now skipped instead of raising "patch target mis
 | API | `GET /api/usage-stats?range=today|24h|7d|30d|60d` → totals, pool slices (ok attempts by pool + one `Fail` bucket), per-model stats with fail rates/reasons, latest 30 attempts. |
 | Page | `/dashboard/pool-usage` (sidebar **Usage**, added by this phase): 4 stat cards (requests with served/failed hint, input, cached, output — no dollars), SVG donut (Local / Mobile / Fail %, `direct` appears only in failover mode) with legend, recent-requests table (model · pool · in/cached/out · status) and a sortable per-model table. **No new dependencies** (hand-rolled SVG donut, no recharts). |
 | Paths | The page/API deliberately sit outside `usage-quota`'s delete list (`/dashboard/pool-usage`, `/api/usage-stats`) so `verify all` stays green; the recorder files are plain additions, like the `pool-obs` console-log routes. |
+
+### The `zen-caps` phase (Zen free-tier limits)
+
+The generic capability patterns mis-size the OpenCode Free (Zen) ids — `*step-*` says 128k
+while `step-5-preview-free` is a 1M model, and the `-free` DeepSeek/MiMo variants are capped
+at 200k although their family patterns say 1M. `zen-caps` pins the six wrong ids at their
+models.dev values (checked 2026-10-16, flags kept exactly as the patterns resolved them):
+
+| model | ctx / out |
+|---|---|
+| `step-5-preview-free` | 1,000,000 / 65,536 |
+| `nemotron-3.5-super-vl-free` | 1,048,576 / 131,072 |
+| `nemotron-3.5-lightning-free` | 262,144 / 262,144 |
+| `cat-jam-free` | 262,144 / 131,072 |
+| `mimo-v2.6-flash-free` | 200,000 / 32,000 |
+| `deepseek-v4.1-flash-free` | 200,000 / 32,000 |
+
+With that, `free-autopilot` (step-5 + space-bunny + muse-spark-1.3) publishes a **1M** combo
+window and `max_completion_tokens` 65,536.
+
+The same phase makes `/v1/models` actually emit those numbers: in this fork the DB holds no
+provider rows (OpenCode Free is a virtual no-auth connection), so the route used to take its
+"DB unavailable" static branch, which published no `context_length` /
+`max_completion_tokens` at all. Counting the synthetic no-auth connections in that check
+routes the models through the full per-provider loop instead.
+
+Note: the client (OpenCode CLI/Desktop) does **not** read limits from `/v1/models` for
+custom providers — it defaults to `{ context: 200000, output: 32000 }` when a model entry
+has no `limit`. `mobile-pool/opencode.jsonc` therefore pins `limit` per model.
 
 **Overlays.** Ten files are deliberate fork rewrites rather than edits, so they live in
 full under `scripts/lean/overlays/` and the phase copies them over verbatim:

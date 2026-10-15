@@ -278,7 +278,12 @@ export async function buildModelsList(kindFilter, options = {}) {
     models.push(entry);
   }
 
-  if (connections.length === 0) {
+  // No usable connection at all -> static list. In this fork the DB holds no
+  // provider rows — OpenCode Free is a virtual no-auth connection — so the
+  // synthetic entries above are the normal case; counting them lets the
+  // per-provider loop below publish capabilities plus context_length /
+  // max_completion_tokens from the capability tables.
+  if (activeConnectionByProvider.size === 0) {
     // DB unavailable -> return static models, filtered by per-model kind
     for (const [alias, providerModels] of Object.entries(PROVIDER_MODELS)) {
       const providerId = ALIAS_TO_PROVIDER_ID[alias] || alias;

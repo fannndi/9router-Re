@@ -55,6 +55,10 @@ On this machine Node is not on `PATH`: prefix commands with
   read by the **Usage** page (`/dashboard/pool-usage`). Hooks: `saveUsageStats()`
   (requestDetail, token rows), the chat loop's `!result.success` branch and `combo.js`'s
   zero-content branch.
+- `open-sse/providers/capabilities.js` — capability/limit tables. Zen free-tier limits are
+  pinned here (`zen-caps` phase) because the generic patterns mis-size them; `/v1/models`
+  publishes them through the per-provider loop (the synthetic no-auth connections count as
+  connections).
 - `open-sse/` — the SSE engine; see `open-sse/AGENTS.md`.
 - `open-sse/providers/registry/opencode.js` — the only provider entry.
 - `tests/` — vitest; see `tests/README.md` and `tests/translator/AGENTS.md`.
