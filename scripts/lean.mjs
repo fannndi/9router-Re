@@ -4118,8 +4118,8 @@ const STRATEGIES = [
               ? \`Need at least 2 active proxy pools for rotation.\`
               : isRotation
                 ? rotateStrategy === "round-robin"
-                  ? \`Rotating across all \${proxyPools.length} active pools; the start pool alternates once per request, and a failed pool falls through to the next one. Mobile pools consume phone data quota — use Failover for daily use.\`
-                  : \`Picking a random pool from \${proxyPools.length} active pools each request; a failed pool falls through to the next one. Mobile pools consume phone data quota.\`
+                  ? \`Rotating across all \${proxyPools.length} active pools: the start pool alternates on every upstream call and a rate-limited (429) pool falls through to the next, so every exit IP carries its own share of the free-tier limits. Phone data is spent in proportion; Failover keeps the phone idle until a 429.\`
+                  : \`Picking a random pool from \${proxyPools.length} active pools each request; a rate-limited (429) pool falls through to the next one. Phone data is spent in proportion.\`
                 : \`Uses the selected pool above. Set to Round-robin or Random to rotate across all active pools.\`}`,
     },
     // ── proxy-pools API: failoverOrder rides in the JSON data column

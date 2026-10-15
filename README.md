@@ -3,11 +3,14 @@
 A slimmed-down fork of [decolua/9router](https://github.com/decolua/9router) that serves
 **only OpenCode Free** models, with two additions that matter for free-tier use:
 
-1. **Proxy-pool failover on 429** — when the home IP is rate-limited, the same request is
-   retried through the next pool entry (the phone's mobile IP over USB tether + tinyproxy),
-   with per-model cooldowns that honour `Retry-After`.
+1. **Two exit IPs, spread on purpose** — `round-robin` alternates requests between the home
+   connection and the phone's mobile IP (USB tether + tinyproxy), so every IP carries its own
+   share of the free-tier limits and sessions last longer. A rate-limited pool falls through
+   to the next one *inside the same request*, with per-model cooldowns that honour
+   `Retry-After`. `Failover on 429` keeps the phone idle until a 429 (quota-saver variant).
 2. **Combos** — round-robin / fallback across free models so one model's limit does not end
-   the session.
+   the session. Combined with the two pools, each (model, IP) pair sees a fraction of the
+   traffic.
 
 Everything else from upstream is gone: 137 other providers, media endpoints, usage/quota
 tracking, token savers, MITM, Cloudflare tunnel/Tailscale, OIDC/SAML, the npm updater, the
@@ -117,7 +120,7 @@ models); the individual `oc/*` models are also listed.
 | **Endpoint & Key** | the API base URL + key management (`require API key`, restrictions) |
 | **Providers** | OpenCode Free status + custom OpenAI/Anthropic-compatible endpoints |
 | **Combos** | `free-autopilot` membership, strategy (fallback / round-robin / fusion) and the vision adapter |
-| **Provider strategy** (Providers → OpenCode Free) | `Failover on 429` (direct → pools, walks the ordered chain) or `Round-robin`/`Random` (start pool alternates per request, a failed pool falls through to the next). Mobile pools consume phone quota — round-robin is a demo mode; keep failover for daily use. |
+| **Provider strategy** (Providers → OpenCode Free) | `Round-robin` (default here): the start pool alternates on every upstream call (each combo model attempt counts), a rate-limited pool falls through to the next, so both IPs share the free limits. `Failover on 429`: direct first, pools only on 429 (phone data stays idle until needed). `Random`: same as round-robin with a random start. |
 | **Proxy Pools** | pool entries with a **Failover order** (`Local (host)` → `127.0.0.1:8899`, `Mobile (phone tether)` → `127.0.0.1:8888`), plus the row **Check setup** button that verifies tether / policy route / proxy / exit IP without sudo |
 | **Console Log** | live server output with per-request pool attribution: `▶ … POOL:"Mobile (phone tether)" (2/2)`, `[PROXY] … pool="…" | url=…`, `⇄ POOL:"direct" UNAVAILABLE (429) → NEXT POOL "…"` |
 | **Settings** | password/login, routing strategy, outbound proxy, observability toggle, backup |
