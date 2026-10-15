@@ -227,14 +227,16 @@ function cmdVerify(args) {
     const phase = PHASES[id];
     const leftoverPaths = (phase.delete || []).filter((rel) => exists(rel));
     const leftoverPatches = (phase.patch || []).filter((rule) => {
+      let src;
       try {
-        const src = read(rule.file);
-        if (rule.cutFrom) return src.includes(rule.cutFrom);
-        if (rule.check) return !src.includes(rule.check);
-        return src.includes(rule.find);
+        src = read(rule.file);
       } catch {
-        return true; // file missing → unresolved
+        // Patch target already gone (e.g. deleted by a later phase) → resolved.
+        return false;
       }
+      if (rule.cutFrom) return src.includes(rule.cutFrom);
+      if (rule.check) return !src.includes(rule.check);
+      return src.includes(rule.find);
     });
     const leftoverDeps = (phase.deps?.remove || []).filter((dep) => {
       const pkg = JSON.parse(read("package.json"));
@@ -321,7 +323,7 @@ import useSettingsStore from "@/store/settingsStore";`,
 
   const INSTALL_CMD = UPDATER_CONFIG.installCmdLatest;`,
         replace: `  const [enableTranslator, setEnableTranslator] = useState(false);`,
-        check: `const [enableTranslator, setEnableTranslator] = useState(false);`,
+        checkAbsent: true,
       },
       {
         file: "src/shared/components/Sidebar.js",
@@ -2581,6 +2583,8 @@ export const config = {
       "src/shared/components/DonateModal.js",
       "src/app/(dashboard)/dashboard/translator",
       "src/app/api/translator",
+      "src/shared/components/ChangelogModal.js",
+      "src/lib/db/adapters/sqljsAdapter.js",
     ],
     deps: {
       remove: [
@@ -2808,12 +2812,83 @@ export const config = {
         check: `No SQLite driver available (bun/better/node all failed)`,
       },
       {
-        file: "package.json",
-        find: `    "cli:pack": "npm --prefix cli run pack:cli",
-    "cli:publish": "npm --prefix cli run publish:cli"
+        file: "src/app/layout.js",
+        find: `import { GoogleAnalytics } from "@next/third-parties/google";
 `,
         replace: "",
         checkAbsent: true,
+      },
+      {
+        file: "src/app/layout.js",
+        find: `        <GoogleAnalytics gaId={"G-LC959F603F"} />
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "next.config.mjs",
+        find: `optimizePackageImports: ["@xyflow/react", "@dnd-kit/core", "@dnd-kit/sortable", "material-symbols", "marked"],`,
+        replace: `optimizePackageImports: ["@dnd-kit/core", "@dnd-kit/sortable", "material-symbols"],`,
+        check: `optimizePackageImports: ["@dnd-kit/core", "@dnd-kit/sortable", "material-symbols"],`,
+      },
+      {
+        file: "src/shared/components/HeaderMenu.js",
+        find: `import ChangelogModal from "./ChangelogModal";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/HeaderMenu.js",
+        find: `  const [changelogOpen, setChangelogOpen] = useState(false);
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/HeaderMenu.js",
+        find: `            <MenuItem
+              icon="history"
+              label="Change Log"
+              onClick={() => { close(); setChangelogOpen(true); }}
+            />
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/HeaderMenu.js",
+        find: `      <ChangelogModal isOpen={changelogOpen} onClose={() => setChangelogOpen(false)} />
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/index.js",
+        find: `export { default as ChangelogModal } from "./ChangelogModal";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/constants/config.js",
+        find: `// GitHub configuration
+export const GITHUB_CONFIG = {
+  changelogUrl: "https://raw.githubusercontent.com/decolua/9router/refs/heads/master/CHANGELOG.md",
+  donateUrl: "https://9router.com/api/donate",
+};
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "package.json",
+        find: `    "start:bun": "bun ./.next/standalone/custom-server.js",
+    "cli:pack": "npm --prefix cli run pack:cli",
+    "cli:publish": "npm --prefix cli run publish:cli"`,
+        replace: `    "start:bun": "bun ./.next/standalone/custom-server.js"`,
+        check: `"start:bun": "bun ./.next/standalone/custom-server.js"`,
       },
     ],
   },

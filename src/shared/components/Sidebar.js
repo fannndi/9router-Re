@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import PropTypes from "prop-types";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/shared/utils/cn";
 import { APP_CONFIG } from "@/shared/constants/config";
-import useSettingsStore from "@/store/settingsStore";
 
 const navItems = [
   { href: "/dashboard/endpoint", label: "Endpoint & Key", icon: "api" },
@@ -28,14 +27,6 @@ const systemItems = [
 
 export default function Sidebar({ onClose }) {
   const pathname = usePathname();
-  const [enableTranslator, setEnableTranslator] = useState(false);
-
-  useEffect(() => {
-    useSettingsStore.getState().fetchSettings().then((data) => {
-      if (data?.enableTranslator) setEnableTranslator(true);
-    });
-  }, []);
-
   const isActive = (href) => {
     if (href === "/dashboard/endpoint") {
       return pathname === "/dashboard" || pathname.startsWith("/dashboard/endpoint");
@@ -126,9 +117,7 @@ export default function Sidebar({ onClose }) {
             ))}
 
             {/* Debug items (inside System section, before Settings) */}
-            {debugItems.map((item) => {
-              const show = item.href !== "/dashboard/translator" || enableTranslator;
-              return show ? (
+            {debugItems.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}
@@ -150,45 +139,7 @@ export default function Sidebar({ onClose }) {
                   </span>
                   <span className="text-[13px] font-medium">{item.label}</span>
                 </Link>
-              ) : null;
-            })}
-
-            {/* Remote */}
-            <a
-              href="https://9remote.cc"
-              target="_blank"
-              rel="noreferrer"
-              onClick={onClose}
-              className={cn(
-                "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group w-full",
-                "text-text-muted hover:bg-surface-2 hover:text-text-main"
-              )}
-            >
-              <span className="material-symbols-outlined text-[18px] group-hover:text-primary transition-colors">
-                computer
-              </span>
-              <span className="text-[13px] font-medium">9Remote</span>
-              <span className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-[3px] bg-orange-500/15 text-orange-400">
-                HOT
-              </span>
-            </a>
-
-            {/* 9English */}
-            <a
-              href="https://9english.net/"
-              target="_blank"
-              rel="noreferrer"
-              onClick={onClose}
-              className={cn(
-                "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group w-full",
-                "text-text-muted hover:bg-surface-2 hover:text-text-main"
-              )}
-            >
-              <span className="material-symbols-outlined text-[18px] group-hover:text-primary transition-colors">
-                translate
-              </span>
-              <span className="text-[13px] font-medium">9English</span>
-            </a>
+            ))}
 
             {/* Settings */}
             <Link

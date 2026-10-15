@@ -7,12 +7,6 @@ export const APP_CONFIG = {
   version: pkg.version,
 };
 
-// GitHub configuration
-export const GITHUB_CONFIG = {
-  changelogUrl: "https://raw.githubusercontent.com/decolua/9router/refs/heads/master/CHANGELOG.md",
-  donateUrl: "https://9router.com/api/donate",
-};
-
 // App port used by internal self-tests (model ping / provider test). PORT is
 // injected by the systemd unit; 20128 is the upstream default.
 export const APP_PORT = Number(process.env.PORT || 20128);

@@ -1,39 +1,63 @@
-# open-sse
+# open-sse (lean fork)
 
-Provider-agnostic SSE engine: one OpenAI-style request → any provider (LLM chat, image, embedding, tts, stt, search), streamed back in the client's format.
+Provider-agnostic SSE engine: one OpenAI-style request → OpenCode Free, streamed back in
+the client's format. This fork stripped the engine down to a single provider; the strip is
+scripted in `scripts/lean.mjs` (see `LEAN.md`) and every phase is idempotent.
 
 ## Request lifecycle (chat)
 
-`handlers/chatCore.js` → `services/model.js` `parseModel` (resolve `provider/model`) → **RTK for `cursor`** (`rtk/` compresses the source-format `tool_result` / `role:tool` in-place — its translator rewrites those shapes, so this one provider must run **before** translate) → `translator/index.js` `translateRequest` (client format → provider format) → **post-translate savers** (`rtk/` compress for every other provider, `rtk/headroom.js` proxy compress, `rtk/caveman.js` / `rtk/ponytail.js` system inject — all fail-open) → `executors/index.js` `getExecutor(provider)` → `executor.execute()` (streams upstream) → `translateResponse` (provider chunks → client format) → SSE out.
+`handlers/chatCore.js` → `services/model.js` `parseModel` (resolve `provider/model`) →
+`translator/index.js` `translateRequest` (client format → provider format) →
+`executors/index.js` `getExecutor(provider)` (`opencode` executor; everything else falls
+back to `DefaultExecutor`) → `executor.execute()` (streams upstream) → `translateResponse`
+→ SSE out.
 
 ## Directory map
 
-- `config/` — ALL constants/config (no hardcode elsewhere). `providers.js`/`registry/` (provider defs), `providerModels.js` (alias→models matrix), `runtimeConfig.js` (timeouts, token limits), `*Constants.js`.
-- `translator/` — format conversion. `request/<from>-to-<to>.js`, `response/<from>-to-<to>.js`, `schema/` (enums: ROLE, CLAUDE_BLOCK…), `concerns/` (shared logic), `formats.js`+`formats/` (per-format). `index.js` is the registry/entry.
-- `executors/` — per-provider upstream call. `base.js` (BaseExecutor), one file per special provider, `index.js` map.
-- `providers/` — registry build + `capabilities.js` + `pricing.js`. Entry: `index.js` (PROVIDERS).
-- `handlers/` — per-modality cores (chat/image/embedding/tts/stt/search) + sub-provider folders. `chatCore/` has the streaming/non-streaming/sse-to-json handlers.
-- `rtk/` — request token-killer. `index.js` compresses `tool_result` content in-place (OpenAI/Claude/Kiro shapes); `filters/` per-tool compressors + `autodetect.js`; `headroom.js` external compress proxy; `caveman.js` system-prompt injector.
-- `transformer/` — `responsesTransformer.js` (Chat Completions SSE → Codex Responses API SSE), `streamToJsonConverter.js`.
-- `shared/` — cross-provider auth/identity: `clineAuth.js`, `machineId.js`, `qoder/`.
-- `services/` — `model.js`, `provider.js`, `accountFallback.js`, `combo.js`, `compact.js`, `tokenRefresh/`+`tokenRefresh.js`, `oauthCredentialManager.js`, `usage/`, `projectId.js`, `kiroModels.js`/`qoderModels.js`.
-- `utils/` — streamHandler, stream, sse, error, sessionManager, claudeCloaking, clientDetector, proxyFetch (patches global fetch), cursorProtobuf/cursorChecksum, ollamaTransform.
+- `config/` — constants/config. `providers.js` (barrel), `providerModels.js` (alias→models),
+  `runtimeConfig.js` (timeouts, token limits), `*Constants.js`.
+- `translator/` — format conversion (`request/<from>-to-<to>.js`, `response/…`, `schema/`,
+  `concerns/`, `formats.js`). `index.js` is the registry/entry; translators self-register on
+  import.
+- `executors/` — only `opencode.js` (Zen free transport: fingerprint, reasoning echo,
+  session id) + `default.js` (generic OpenAI/Anthropic-compatible) + `base.js`.
+- `providers/` — `registry/index.js` (single entry: `opencode.js`), `capabilities.js`,
+  `pricing.js`, `shared.js`, `visionPatterns.js`, `thinkingLevels.js`.
+- `handlers/` — `chatCore.js` + `chatCore/` (streaming / non-streaming / sse-to-json) and
+  `responsesHandler.js`. Media cores (image/tts/stt/video/embedding/search) were removed.
+- `services/` — `model.js`, `provider.js`, `accountFallback.js`, `combo.js` (fallback /
+  round-robin / fusion), `capacityAdapter.js` (**vision pool only**), `tokenRefresh*`
+  (kept for API shape; no OAuth providers remain), `projectId.js`, `thoughtSignatureStore.js`.
+- `utils/` — `streamHandler`, `stream`, `sse`, `error`, `sessionManager`, `claudeCloaking`,
+  `clientDetector`, `proxyFetch` (global fetch patch + proxy pools), `opencodeFingerprint`,
+  `reasoningContentInjector`, `ollamaTransform`.
 
 ## Conventions
 
-- Config-driven, DRY, camelCase. NEVER hardcode values, models, or block/role strings — use `config/` + `schema/` constants.
-- Translator pipeline pivots through OpenAI as the intermediate format. A translator registered on the exact `source:target` pair (e.g. `claude:kiro`) runs as a **direct route**, skipping the lossy double-hop.
-- Translators self-register via `register(from, to, reqFn, resFn)` as an import side-effect — new files MUST be imported in `translator/index.js`.
+- Config-driven, DRY, camelCase. Never hardcode values, models, or block/role strings — use
+  `config/` + `schema/` constants.
+- The translator pipeline pivots through OpenAI as the intermediate format. A translator
+  registered on the exact `source:target` pair runs as a direct route.
+- Translators self-register via `register(from, to, reqFn, resFn)` as an import side-effect;
+  new files MUST be imported in `translator/index.js`.
 
 ## How to add
 
-- **Provider**: copy `providers/REGISTRY_TEMPLATE.js` → `providers/registry/{id}.js`; add models to `config/providerModels.js`. Generic providers need no executor (DefaultExecutor handles OpenAI-compatible APIs).
-- **Executor** (only for non-standard upstream): subclass `BaseExecutor` (override `getBaseUrls`/`buildHeaders`/`buildUrl`/`execute`), register in `executors/index.js` map. `getExecutor` falls back to `DefaultExecutor` when absent.
-- **Translator**: add `request|response/<from>-to-<to>.js` calling `register(...)`, then import it in `translator/index.js`. Reuse `schema/` + `concerns/` — don't re-implement parsing.
+- **Provider**: copy `providers/REGISTRY_TEMPLATE.js` → `providers/registry/{id}.js`, add it
+  to `providers/registry/index.js` (single static import list), and add models there. If you
+  want it kept after a re-strip, also add it to the `providers` phase keep-list in
+  `scripts/lean.mjs`.
+- **Executor** (only for non-standard upstream): subclass `BaseExecutor` (override
+  `getBaseUrls`/`buildHeaders`/`buildUrl`/`execute`), register it in the `executors` map in
+  `executors/index.js`. `getExecutor` falls back to `DefaultExecutor` when absent.
+- **Translator**: add `request|response/<from>-to-<to>.js` calling `register(...)`, then
+  import it in `translator/index.js`. Reuse `schema/` + `concerns/`.
 
 ## Pitfalls
 
-- OpenAI bridge is lossy (thinking, non-base64 images, tool ids, is_error) — prefer a direct route for fragile pairs.
-- `registry/index.js` is an auto-generated static import list; regenerate it (don't hand-edit) after adding a `registry/{id}.js`. REGISTRY_TEMPLATE is excluded by design.
-- Special binary/protobuf formats (kiro EventStream, cursor protobuf, commandcode NDJSON) don't round-trip through OpenAI — handle in their executor.
-- `rtk/` + `headroom.js` mutate the request body in-place and are **fail-open**: any error returns null and leaves the body untouched — never throw out of them. RTK skips `is_error`/`status:"error"` tool results to preserve traces.
+- OpenAI bridge is lossy (thinking, non-base64 images, tool ids, is_error) — prefer a direct
+  route for fragile pairs.
+- `providers/registry/index.js` upstream is auto-generated; here it is hand-maintained and
+  script-filtered. Keep the default export an array of registry entries.
+- `fetch` is patched globally by `utils/proxyFetch.js` (proxy pools / failover). Anything
+  that bypasses it bypasses the mobile-pool failover.
