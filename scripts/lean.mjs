@@ -129,6 +129,23 @@ function applyPhase(phase, { dry = false, quiet = false } = {}) {
     log(c.dim(`  - rm ${rel}`));
   }
 
+  // pruneDir: empty a directory except the keep-list (used for the static
+  // provider-registry / executor import lists).
+  for (const spec of phase.pruneDir || []) {
+    const dirAbs = path.join(ROOT, spec.dir);
+    if (!fs.existsSync(dirAbs)) {
+      skipped++;
+      continue;
+    }
+    const keep = new Set(spec.keep || []);
+    for (const entry of fs.readdirSync(dirAbs)) {
+      if (keep.has(entry)) continue;
+      if (!dry) fs.rmSync(path.join(dirAbs, entry), { recursive: true, force: true });
+      deleted++;
+      log(c.dim(`  - rm ${spec.dir}/${entry}`));
+    }
+  }
+
   for (const rule of phase.patch || []) {
     const res = applyPatch(rule, { dry });
     if (res === "applied") {
@@ -223,12 +240,22 @@ function cmdVerify(args) {
       const pkg = JSON.parse(read("package.json"));
       return !!pkg.dependencies?.[dep];
     });
-    if (leftoverPaths.length || leftoverPatches.length || leftoverDeps.length) {
+    const leftoverPrunes = (phase.pruneDir || []).flatMap((spec) => {
+      const dirAbs = path.join(ROOT, spec.dir);
+      if (!fs.existsSync(dirAbs)) return [];
+      const keep = new Set(spec.keep || []);
+      return fs
+        .readdirSync(dirAbs)
+        .filter((entry) => !keep.has(entry))
+        .map((entry) => `${spec.dir}/${entry}`);
+    });
+    if (leftoverPaths.length || leftoverPatches.length || leftoverDeps.length || leftoverPrunes.length) {
       problems++;
       console.log(c.red(`✗ ${id} not fully applied`));
       for (const p of leftoverPaths) console.log(c.red(`    path still present: ${p}`));
       for (const p of leftoverPatches) console.log(c.red(`    patch site still present: ${p.file}`));
       for (const d of leftoverDeps) console.log(c.red(`    dep still present: ${d}`));
+      for (const p of leftoverPrunes) console.log(c.red(`    dir entry still present: ${p}`));
     } else {
       console.log(c.green(`✓ ${id} applied`));
     }
@@ -239,8 +266,7 @@ function cmdVerify(args) {
 // ─── phases ────────────────────────────────────────────────────────────────
 
 const PHASES = {
-  // 1 ── updater: the single most dangerous feature in a fork. It ran
-  // `npm i -g 9router`, i.e. it would overwrite this fork's own build.
+
   updater: {
     title: "drop npm self-updater (would install upstream over this fork)",
     delete: ["src/app/api/version", "src/app/api/shutdown", "src/lib/appUpdater.js"],
@@ -650,8 +676,6 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";`,
     ],
   },
 
-  // 2 ── CLI Tools: 30 integrations that only rewrite other tools' config files
-  // (claude/codex/cline/jcode/…). This fork ships OpenCode only.
   "cli-tools": {
     title: "drop CLI Tools dashboard + api, MCP stdio bridge, Cursor/Claude combo presets",
     delete: [
@@ -847,9 +871,6 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";`,
     ],
   },
 
-  // 3 ── Media: image generation, TTS/STT, video, embeddings, web search/fetch.
-  // The fork is a chat gateway: vision *input* stays (capacityAdapter.vision),
-  // everything that generates or transcribes media goes away.
   media: {
     title: "drop media providers (image/tts/stt/video/embedding/search/fetch/systemone), keep vision input",
     delete: [
@@ -1090,11 +1111,6 @@ const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "trave
     ],
   },
 
-  // 4 ── Usage & Quota: request/usage history, statistics, quota tracker and
-  // the quota auto-ping scheduler. The fork keeps the "📊 DONE" log line (it
-  // comes from formatDoneLine, no DB) but drops every write and every page.
-  // The hot chat path is decoupled with a no-op stub instead of edits at ~20
-  // call sites.
   "usage-quota": {
     title: "drop usage tracking + quota tracker + auto-ping (stub the chat-path hooks)",
     delete: [
@@ -1401,10 +1417,6 @@ function hasQuotaAutoPingEnabled(settings) {
     ],
   },
 
-  // ponytail prompt injectors and PXPIPE image compression. The user prefers the
-  // model's own tool-selection quality over prompt compression, so every saver
-  // goes — including the per-request x-9router-token-saver header path.
-  // 5 ── Token savers: RTK tool-result compression, headroom proxy, caveman /
   "token-saver": {
     title: "drop token savers (rtk, headroom, caveman, ponytail, pxpipe)",
     delete: [
@@ -1609,9 +1621,6 @@ import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
     ],
   },
 
-  // 6 ── SSO (OIDC + SAML): the fork is a single-user local gateway with a
-  // password; enterprise SSO only added a login bypass surface and a heavy
-  // @node-saml dependency. Password login stays.
   sso: {
     title: "drop OIDC/SAML sign-in (password-only dashboard login)",
     delete: [
@@ -1924,10 +1933,6 @@ export async function GET() {
     ],
   },
 
-  // 7 ── MITM (Antigravity interception) + Tunnel/Tailscale remote access.
-  // Both were always-off here and each carries background work: a watchdog,
-  // a network monitor, DNS/cert management and a browser-side ping loop. The
-  // fork is reached over LAN + the phone's mobile IP instead.
   "mitm-tunnel": {
     title: "drop MITM proxy + Cloudflare tunnel + Tailscale, slim the boot service",
     delete: [
@@ -2236,9 +2241,318 @@ import Tooltip from "./components/Tooltip";
       },
     ],
   },
-  // 8 ── Cosmetics + dead weight: docs sites, deploy manifests, npm CLI package,
-  // Skills, Translator debugger, pricing page, 9Remote/9English/Donate promos and
-  // the sql.js DB fallback (node:sqlite is always present on Node ≥22.5).
+
+  providers: {
+    title: "keep only OpenCode Free (prune registry, executors, OAuth flows)",
+    pruneDir: [
+      { dir: "open-sse/providers/registry", keep: ["index.js", "opencode.js"] },
+      { dir: "open-sse/executors", keep: ["index.js", "opencode.js", "default.js", "base.js"] },
+    ],
+    delete: [
+      "src/lib/oauth/providers",
+      "src/lib/oauth/providers.js",
+      "src/lib/oauth/services",
+      "src/lib/oauth/kiroExternalIdp.js",
+      "src/lib/oauth/utils",
+      "src/lib/mimoLoginSession.js",
+      "src/app/api/oauth",
+      "src/app/callback",
+      "src/app/api/providers/kilo",
+      "src/app/api/providers/suggested-models",
+      "src/shared/components/OAuthModal.js",
+      "src/shared/components/KiroOAuthWrapper.js",
+      "src/shared/components/KiroSocialOAuthModal.js",
+      "src/shared/components/CursorAuthModal.js",
+      "src/shared/components/ZedAuthModal.js",
+      "src/shared/components/XiaomiMimoAuthModal.js",
+      "src/shared/components/IFlowCookieModal.js",
+      "src/shared/components/GitLabAuthModal.js",
+      "src/shared/components/KiroAuthModal.js",
+      "src/sse/services/backgroundTokenRefresh.js",
+    ],
+    patch: [
+      {
+        file: "open-sse/providers/registry/index.js",
+        writeFile: `// Lean fork: only the OpenCode Free provider is bundled (see scripts/lean.mjs).
+// Upstream's file is auto-generated from registry/*.js — when a provider is
+// restored, add its import here (and its file) or run the strip script again.
+import p0 from "./opencode.js";
+
+const REGISTRY = [p0];
+
+export default REGISTRY;
+`,
+        check: "only the OpenCode Free provider is bundled",
+      },
+      {
+        file: "open-sse/executors/index.js",
+        writeFile: `// Lean fork: OpenCode Free + the generic OpenAI/Anthropic-compatible executor
+// (see scripts/lean.mjs). getExecutor() falls back to DefaultExecutor.
+import { OpenCodeExecutor } from "./opencode.js";
+import { DefaultExecutor } from "./default.js";
+
+const executors = {
+  opencode: new OpenCodeExecutor(),
+};
+
+const defaultCache = new Map();
+
+export function getExecutor(provider) {
+  if (executors[provider]) return executors[provider];
+  if (!defaultCache.has(provider)) defaultCache.set(provider, new DefaultExecutor(provider));
+  return defaultCache.get(provider);
+}
+
+export function hasSpecializedExecutor(provider) {
+  return !!executors[provider];
+}
+
+export { BaseExecutor } from "./base.js";
+export { DefaultExecutor } from "./default.js";
+export { OpenCodeExecutor } from "./opencode.js";
+`,
+        check: "OpenCode Free + the generic OpenAI/Anthropic-compatible executor",
+      },
+      {
+        file: "open-sse/services/tokenRefresh/providers.js",
+        find: `import { buildExternalIdpRefreshParams } from "../../../src/lib/oauth/kiroExternalIdp.js";
+`,
+        replace: `// Lean fork: the Kiro external-IdP flow went away with the OAuth providers.
+function buildExternalIdpRefreshParams() {
+  return null;
+}
+`,
+        check: `function buildExternalIdpRefreshParams() {`,
+      },
+      {
+        file: "open-sse/services/tokenRefresh/providers.js",
+        find: `let _xaiServiceSingleton = null;
+export async function refreshXaiToken(refreshToken, log) {
+  if (!refreshToken) return null;
+  return dedupRefresh("xai", refreshToken, async () => {
+    try {
+      if (!_xaiServiceSingleton) {
+        const mod = await import("../../../src/lib/oauth/services/xai.js");
+        _xaiServiceSingleton = new mod.XaiService();
+      }
+      const tokens = await _xaiServiceSingleton.refreshAccessToken(refreshToken);
+      return {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || refreshToken,
+        expiresIn: tokens.expires_in,
+        idToken: tokens.id_token,
+      };
+    } catch (e) {
+      log?.warn?.("TOKEN_REFRESH", \`xai refresh failed: \${e?.message || e}\`);
+      const msg = String(e?.message || "");
+      if (msg.includes("invalid_grant") || msg.includes("invalid_request")) {
+        return { error: "invalid_grant" };
+      }
+      return null;
+    }
+  }, log);
+}`,
+        replace: `// Lean fork: the xAI / grok-cli refresh lived in the OAuth service layer that
+// was removed with the other providers. Kept as a nullable stub so the refresh
+// profile map below stays intact.
+export async function refreshXaiToken() {
+  return null;
+}`,
+        check: `Kept as a nullable stub`,
+      },
+      {
+        file: "open-sse/services/tokenRefresh/providers.js",
+        find: `    const { fetchKiroProfileArn } = await import("../../../src/lib/oauth/providers.js");
+    profileArn = await fetchKiroProfileArn(accessToken);
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/client/route.js",
+        find: `import { backfillCodexEmails } from "@/lib/oauth/providers";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/client/route.js",
+        find: `    await backfillCodexEmails();
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
+        find: `import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, ZedAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
+        replace: `import { Card, Button, Modal, CardSkeleton, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
+        check: `NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
+        find: `      {/* Modals */}`,
+        cutTo: `      <AddApiKeyModal`,
+      },
+      {
+        file: "src/shared/components/index.js",
+        find: `export { default as OAuthModal } from "./OAuthModal";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/index.js",
+        find: `export { default as KiroAuthModal } from "./KiroAuthModal";
+export { default as KiroOAuthWrapper } from "./KiroOAuthWrapper";
+export { default as CursorAuthModal } from "./CursorAuthModal";
+export { default as ZedAuthModal } from "./ZedAuthModal";
+export { default as XiaomiMimoAuthModal } from "./XiaomiMimoAuthModal";
+export { default as IFlowCookieModal } from "./IFlowCookieModal";
+export { default as GitLabAuthModal } from "./GitLabAuthModal";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/validate/route.js",
+        find: `import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/[id]/test/testUtils.js",
+        find: `import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "open-sse/translator/index.js",
+        find: `import { AntigravityExecutor } from "../executors/antigravity.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/validate/route.js",
+        find: `      // AWS-signed providers (Bedrock) have no bearer key for the generic probes below, which
+      // would reject bedrock outright and send bedrock-xai to a literal "{region}" host.
+      if (AI_PROVIDERS[provider]?.credentialForm === "aws") {
+        return NextResponse.json(await probeBedrockCredentials({ apiKey, providerSpecificData }, fetch));
+      }
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/[id]/test/testUtils.js",
+        find: `  // AWS-signed providers (Bedrock): without this every Test ends in the switch's default,
+  // "Provider test not supported", and marks a working connection as errored.
+  if (AI_PROVIDERS[connection.provider]?.credentialForm === "aws") {
+    try {
+      return await probeBedrockCredentials(
+        connection,
+        (url, options) => fetchWithConnectionProxy(url, options, effectiveProxy),
+      );
+    } catch (err) {
+      return { valid: false, error: err.message };
+    }
+  }
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/[id]/models/route.js",
+        find: `import codexProvider from "open-sse/providers/registry/codex.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/providers/[id]/models/route.js",
+        find: "const CODEX_MODELS_URL = `https://chatgpt.com/backend-api/codex/models?client_version=${codexProvider.transport.cliVersion}`;",
+        replace: "const CODEX_MODELS_URL = \"https://chatgpt.com/backend-api/codex/models\";",
+        check: `const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models";`,
+      },
+      {
+        file: "custom-server.js",
+        find: `let backgroundRefreshStarted = false;
+
+function startBackgroundTokenRefreshFromCustomServer() {
+  if (backgroundRefreshStarted) return;
+  backgroundRefreshStarted = true;
+  // Prefer source path (repo / standalone that still has src). Fail-open if missing
+  // — initializeApp also starts the same scheduler when the Next app boots.
+  const modPath = path.join(__dirname, "src", "sse", "services", "backgroundTokenRefresh.js");
+  import(pathToFileURL(modPath).href)
+    .then((m) => {
+      try {
+        m.startBackgroundTokenRefresh();
+      } catch (e) {
+        console.error("[BackgroundTokenRefresh] start failed:", e && e.message ? e.message : e);
+      }
+      const stop = () => {
+        try {
+          m.stopBackgroundTokenRefresh();
+        } catch {
+          /* ignore */
+        }
+      };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    })
+    .catch((e) => {
+      // Expected in published CLI standalone (src/ not on disk). App bootstrap covers it.
+      if (process.env.DEBUG_BACKGROUND_TOKEN_REFRESH) {
+        console.error("[BackgroundTokenRefresh] import failed:", e && e.message ? e.message : e);
+      }
+    });
+}
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "custom-server.js",
+        find: `  const server = origCreate(...rest, wrapped);
+  server.once("listening", () => {
+    startBackgroundTokenRefreshFromCustomServer();
+  });`,
+        replace: `  const server = origCreate(...rest, wrapped);`,
+        checkAbsent: true,
+      },
+      {
+        file: "custom-server.js",
+        find: `const { pathToFileURL } = require("url");
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/proxy.js",
+        writeFile: `import { proxy as dashboardProxy } from "./dashboardGuard";
+
+// Lean fork: the Xiaomi MiMo session-login proxy went away with the OAuth
+// providers, so the dashboard auth guard is the only thing left to run.
+export default function proxy(request) {
+  return dashboardProxy(request);
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon\\\\.ico).*)"],
+};
+`,
+        check: "the Xiaomi MiMo session-login proxy went away",
+      },
+    ],
+  },
+
   cosmetics: {
     title: "drop docs/deploy extras, npm CLI, Skills, Translator, pricing, promos, sql.js",
     delete: [

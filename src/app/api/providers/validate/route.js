@@ -5,7 +5,6 @@ import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
-import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import {
   createNousApiKeyProbe,
   getNousApiKeyValidationError,
@@ -242,12 +241,6 @@ export async function POST(request) {
           valid: isValid,
           error: isValid ? null : "Invalid API key or Azure configuration",
         });
-      }
-
-      // AWS-signed providers (Bedrock) have no bearer key for the generic probes below, which
-      // would reject bedrock outright and send bedrock-xai to a literal "{region}" host.
-      if (AI_PROVIDERS[provider]?.credentialForm === "aws") {
-        return NextResponse.json(await probeBedrockCredentials({ apiKey, providerSpecificData }, fetch));
       }
 
       // Generic probe for webSearch/webFetch providers (config-driven)

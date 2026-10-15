@@ -2,33 +2,16 @@ import { PROVIDERS, PROVIDER_OAUTH } from "../../config/providers.js";
 import { OAUTH_ENDPOINTS, GITHUB_COPILOT, buildKimiHeaders } from "../../config/appConstants.js";
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
 import { dedupRefresh } from "./dedup.js";
-import { buildExternalIdpRefreshParams } from "../../../src/lib/oauth/kiroExternalIdp.js";
+// Lean fork: the Kiro external-IdP flow went away with the OAuth providers.
+function buildExternalIdpRefreshParams() {
+  return null;
+}
 
-let _xaiServiceSingleton = null;
-export async function refreshXaiToken(refreshToken, log) {
-  if (!refreshToken) return null;
-  return dedupRefresh("xai", refreshToken, async () => {
-    try {
-      if (!_xaiServiceSingleton) {
-        const mod = await import("../../../src/lib/oauth/services/xai.js");
-        _xaiServiceSingleton = new mod.XaiService();
-      }
-      const tokens = await _xaiServiceSingleton.refreshAccessToken(refreshToken);
-      return {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token || refreshToken,
-        expiresIn: tokens.expires_in,
-        idToken: tokens.id_token,
-      };
-    } catch (e) {
-      log?.warn?.("TOKEN_REFRESH", `xai refresh failed: ${e?.message || e}`);
-      const msg = String(e?.message || "");
-      if (msg.includes("invalid_grant") || msg.includes("invalid_request")) {
-        return { error: "invalid_grant" };
-      }
-      return null;
-    }
-  }, log);
+// Lean fork: the xAI / grok-cli refresh lived in the OAuth service layer that
+// was removed with the other providers. Kept as a nullable stub so the refresh
+// profile map below stays intact.
+export async function refreshXaiToken() {
+  return null;
 }
 
 // Per-provider refresh variants for the generic path. Keys not listed fall back
@@ -317,8 +300,6 @@ async function resolveKiroProfileArnPatch(providerSpecificData, accessToken, ref
   if (providerSpecificData?.profileArn) return {};
   let profileArn = refreshedArn?.trim?.() || null;
   if (!profileArn) {
-    const { fetchKiroProfileArn } = await import("../../../src/lib/oauth/providers.js");
-    profileArn = await fetchKiroProfileArn(accessToken);
   }
   return profileArn ? { providerSpecificData: { profileArn } } : {};
 }
