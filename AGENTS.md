@@ -40,7 +40,7 @@ On this machine Node is not on `PATH`: prefix commands with
 - `src/app/api/v1/*` + `src/app/api/v1beta/*` — client-facing API (OpenAI, Claude,
   Responses, Gemini, Ollama-compat).
 - `src/app/(dashboard)/*` — dashboard pages (Endpoint & Key, Providers, Combos, Proxy Pools,
-  Console Log, Settings).
+  Console Log, Usage, Settings).
 - `src/sse/handlers/chat.js` — chat entry: combo iteration + the **pool chain loop**.
   It builds one `buildPoolPlan()` per request and walks the chain on 429/5xx/transport
   failures (`failoverState.attempted`, `poolRetryAfterMs`).
@@ -50,6 +50,11 @@ On this machine Node is not on `PATH`: prefix commands with
   no sudo: `ip rule`/`ip addr`, `/sys/class/net`, proxy probe, direct-vs-proxy exit IP,
   local proxy service). `scripts/ensure-pool.mjs` upserts a pool straight into `data.sqlite`
   (used by `mobile-pool/setup.sh`).
+- `src/lib/usageStats.js` + `src/app/api/usage-stats/route.js` — fork-owned usage stats: one
+  row per upstream call in `usageHistory` (tokens + serving pool; fail rows carry a reason),
+  read by the **Usage** page (`/dashboard/pool-usage`). Hooks: `saveUsageStats()`
+  (requestDetail, token rows), the chat loop's `!result.success` branch and `combo.js`'s
+  zero-content branch.
 - `open-sse/` — the SSE engine; see `open-sse/AGENTS.md`.
 - `open-sse/providers/registry/opencode.js` — the only provider entry.
 - `tests/` — vitest; see `tests/README.md` and `tests/translator/AGENTS.md`.
@@ -57,8 +62,9 @@ On this machine Node is not on `PATH`: prefix commands with
 ## Constraints
 
 - One provider only (**OpenCode Free**, no-auth). No OAuth flows, no media endpoints, no
-  usage persistence, no token savers, no tunnel/MITM, no i18n layer. Don't reintroduce them
-  incidentally.
+  upstream usage/quota stack (the fork's own minimal recorder is `src/lib/usageStats.js`,
+  added by the `pool-usage` phase), no token savers, no tunnel/MITM, no i18n layer. Don't
+  reintroduce them incidentally.
 - `fetch` is monkey-patched in `open-sse/utils/proxyFetch.js` (pool + failover). Code that
   bypasses `fetch` bypasses the mobile-pool failover — use `fetch`.
 - Log-line contract (Console Log reads these; keep names, not UUIDs):

@@ -6,6 +6,7 @@ import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
 import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
+import { recordUsageEvent } from "@/lib/usageStats.js";
 
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
@@ -354,6 +355,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
               const peekBody = await result.clone().json();
               if (isZeroContentResponse(peekBody)) {
                 log.warn("COMBO", `Model ${modelStr} returned HTTP 200 with zero usable content, falling back to next model`);
+                recordUsageEvent({ ok: false, provider: modelStr.split("/")[0], model: modelStr.split("/").pop(), reason: "empty" });
                 lastError = "Zero usable content";
                 lastStatus = 200;
                 continue;

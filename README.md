@@ -11,10 +11,15 @@ A slimmed-down fork of [decolua/9router](https://github.com/decolua/9router) tha
 2. **Combos** — round-robin / fallback across free models so one model's limit does not end
    the session. Combined with the two pools, each (model, IP) pair sees a fraction of the
    traffic.
+3. **Usage page** — what the pools actually did: donut with `Pool Local` / `Pool Mobile` /
+   `Fail` percentages, token totals (input / cached / output — **no dollars**), per-model
+   fail rate + reasons, and the latest requests with the pool that carried them
+   (`/dashboard/pool-usage`).
 
-Everything else from upstream is gone: 137 other providers, media endpoints, usage/quota
-tracking, token savers, MITM, Cloudflare tunnel/Tailscale, OIDC/SAML, the npm updater, the
-CLI-tool config writers, serverless relay deploys and the dashboard i18n layer. The strip is
+Everything else from upstream is gone: 137 other providers, media endpoints, the upstream
+usage/quota stack (the fork ships its own minimal Usage page instead), token savers, MITM,
+Cloudflare tunnel/Tailscale, OIDC/SAML, the npm updater, the CLI-tool config writers,
+serverless relay deploys and the dashboard i18n layer. The strip is
 scripted (`scripts/lean.mjs`) so `git rebase upstream/master` stays cheap — see
 [LEAN.md](./LEAN.md).
 
@@ -123,6 +128,7 @@ models); the individual `oc/*` models are also listed.
 | **Provider strategy** (Providers → OpenCode Free) | `Round-robin` (default here): the start pool alternates on every upstream call (each combo model attempt counts), a rate-limited pool falls through to the next, so both IPs share the free limits. `Failover on 429`: direct first, pools only on 429 (phone data stays idle until needed). `Random`: same as round-robin with a random start. |
 | **Proxy Pools** | pool entries with a **Failover order** (`Local (host)` → `127.0.0.1:8899`, `Mobile (phone tether)` → `127.0.0.1:8888`), plus the row **Check setup** button that verifies tether / policy route / proxy / exit IP without sudo |
 | **Console Log** | live server output with per-request pool attribution: `▶ … POOL:"Mobile (phone tether)" (2/2)`, `[PROXY] … pool="…" | url=…`, `⇄ POOL:"direct" UNAVAILABLE (429) → NEXT POOL "…"` |
+| **Usage** | attempt-level stats with **pool attribution** (one row per upstream call, incl. combo fallbacks): donut `Pool Local` / `Pool Mobile` / `Fail` in %, totals (requests · input · cached · output tokens, no dollars), per-model fail rate + fail reasons, latest requests with their pool. Ranges: Today / 24h / 7D / 30D / 60D; data is pruned after 90 days. |
 | **Settings** | password/login, routing strategy, outbound proxy, observability toggle, backup |
 
 ## Environment

@@ -22,6 +22,7 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { noteProxyPoolFailure, noteProxyPoolSuccess, buildPoolPlan, getPoolName, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";
+import { recordUsageEvent } from "@/lib/usageStats.js";
 
 /**
  * Retry-After of a failed upstream response, in milliseconds (0 when absent).
@@ -296,6 +297,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       credPsd.connectionProxyPoolName = await getPoolName(credPsd.connectionProxyPoolId);
     }
 
+    // Tag this attempt with the pool that will carry it, so the token rows
+    // written in the chatCore handlers can be attributed (Usage page).
+    if (clientRawRequest) {
+      clientRawRequest._poolName = refreshedCredentials?._poolFailover?.label
+        || credPsd?.connectionProxyPoolName
+        || null;
+    }
+
     // Use shared chatCore
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
@@ -325,6 +334,20 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         await clearAccountError(credentials.connectionId, credentials, model);
       }
     });
+
+    if (!result.success) {
+      // One row per failed attempt (pool + reason) so the Usage page can count
+      // fails per model and per exit IP.
+      recordUsageEvent({
+        ok: false,
+        provider,
+        model,
+        pool: credentials._poolFailover?.label || credPsd?.connectionProxyPoolName || null,
+        poolKey: credentials._poolFailover?.key || null,
+        reason: result.status ? String(result.status) : "transport",
+        endpoint: clientRawRequest?.endpoint || null,
+      });
+    }
 
     if (result.success) {
       const usedPool = credentials._poolFailover || null;

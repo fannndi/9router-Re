@@ -78,6 +78,13 @@ const getPageInfo = (pathname) => {
       icon: "settings",
       breadcrumbs: [],
     };
+  if (pathname.includes("/pool-usage"))
+    return {
+      title: "Usage",
+      description: "Requests, proxy pools and token usage",
+      icon: "bar_chart",
+      breadcrumbs: [],
+    };
   if (pathname.includes("/console-log"))
     return {
       title: "Console Log",

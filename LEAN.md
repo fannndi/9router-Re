@@ -16,7 +16,7 @@ node scripts/lean.mjs audit             # fails when a rule can never apply (che
 ```
 
 Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-saver`,
-`sso`, `mitm-tunnel`, `providers`, `cosmetics`, `sweep`, `pool-obs`.
+`sso`, `mitm-tunnel`, `providers`, `cosmetics`, `sweep`, `pool-obs`, `pool-usage`.
 
 ## What the fork keeps
 
@@ -29,6 +29,7 @@ Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-s
 | Combos (round-robin / fallback / fusion) + **vision adapter only** | `open-sse/services/combo.js`, `open-sse/services/capacityAdapter.js` |
 | API keys, provider connections, dashboard password login | `/dashboard/endpoint`, `/api/keys`, `/api/providers` |
 | Console Log (live server output, **with per-request pool attribution**) | `/dashboard/console-log`, `/api/console-log*` |
+| Usage page (attempt-level pool/token stats, fail rates per model) | `/dashboard/pool-usage`, `/api/usage-stats`, `src/lib/usageStats.js` |
 | Pool chains: `direct → pools` failover (ordered) or round-robin, per-pool+model cooldowns, in-request walk on 429/5xx | `src/lib/network/connectionProxy.js` (`buildPoolPlan`), `src/sse/handlers/chat.js` |
 | "Check setup" diagnostics for a pool (tether, policy route, proxy, exit IP, service) | `/dashboard/proxy-pools` → row button, `/api/proxy-pools/[id]/diagnose` |
 | Client-format translation that can actually occur: `openai`, `claude`, `gemini`, `openai-responses`, Ollama-compat (`/v1/api/chat`) | `open-sse/translator/` |
@@ -43,7 +44,7 @@ aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog sync.
 | `updater` | `/api/version*`, `appUpdater` | ran `npm i -g 9router` — would install **upstream** over this fork |
 | `cli-tools` | 30 CLI config writers, MCP stdio bridge, combo presets | only OpenCode is used |
 | `media` | image/TTS/STT/video/embedding/web-search/systemone | chat gateway; **vision input stays** |
-| `usage-quota` | usage history, stats charts, quota tracker, auto-ping, per-provider quota fetchers | no paid accounts to track |
+| `usage-quota` | the upstream usage history/stats stack, quota tracker, auto-ping, per-provider quota fetchers | no paid accounts to track (the fork's own minimal Usage page is added back by `pool-usage`, see below) |
 | `token-saver` | RTK, headroom, caveman, ponytail, PXPIPE | prompt compression hurt tool selection |
 | `sso` | OIDC + SAML | password-only local dashboard |
 | `mitm-tunnel` | MITM proxy, Cloudflare tunnel, Tailscale, watchdog/network monitor | reached over LAN + phone tether |
@@ -78,6 +79,16 @@ aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog sync.
 
 `pool-obs` also made `apply all` idempotent on an already-stripped tree: a patch whose target
 was deleted by another phase is now skipped instead of raising "patch target missing".
+
+### The `pool-usage` phase (Usage page)
+
+| Feature | Detail |
+|---|---|
+| One row per upstream call | `usageHistory` (existing table, **no migration**) gets a row per attempt: ok rows carry `promptTokens`/`completionTokens` + `tokens:{in,cached,out}` and `meta:{pool,poolKey}`; fail rows carry `meta:{pool,reason}` (`429`, `5xx`, `transport`, `empty`). Rows older than 90 days are pruned (throttled). Legacy rows imported before the fork (empty `meta`) are left alone; delete them once after enabling the feature if you want a clean first view. |
+| Recorder | `src/lib/usageStats.js` (normalises every upstream usage shape, fire-and-forget, never throws) + `src/lib/db/repos/usageStatsRepo.js` (SQL). Hooks: `saveUsageStats()` (token rows; pool via `clientRawRequest._poolName`, set per attempt in `src/sse/handlers/chat.js`), the chat loop's `!result.success` branch (fail rows) and `open-sse/services/combo.js` (zero-content seats → reason `empty`). |
+| API | `GET /api/usage-stats?range=today|24h|7d|30d|60d` → totals, pool slices (ok attempts by pool + one `Fail` bucket), per-model stats with fail rates/reasons, latest 30 attempts. |
+| Page | `/dashboard/pool-usage` (sidebar **Usage**, added by this phase): 4 stat cards (requests with served/failed hint, input, cached, output — no dollars), SVG donut (Local / Mobile / Fail %, `direct` appears only in failover mode) with legend, recent-requests table (model · pool · in/cached/out · status) and a sortable per-model table. **No new dependencies** (hand-rolled SVG donut, no recharts). |
+| Paths | The page/API deliberately sit outside `usage-quota`'s delete list (`/dashboard/pool-usage`, `/api/usage-stats`) so `verify all` stays green; the recorder files are plain additions, like the `pool-obs` console-log routes. |
 
 **Overlays.** Ten files are deliberate fork rewrites rather than edits, so they live in
 full under `scripts/lean/overlays/` and the phase copies them over verbatim:

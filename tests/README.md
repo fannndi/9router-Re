@@ -38,6 +38,7 @@ deployment — on this fork that means the OpenCode Free connection).
 | Combos (routing, fusion, capabilities) | `unit/combo-*` |
 | Dashboard/API surface: keys, auth status, model lookup, provider validation, quirks | `unit/auth-status`, `unit/tenant-*`-style API tests, `unit/model-*`, `unit/compatible-provider-connections`, `unit/bulk-add-names` |
 | DB + migrations | `unit/db-migration-chain`, `unit/key-access-migration` |
+| Usage stats: recorder + aggregation (pool slices, fail reasons, ranges, retention) | `unit/usage-stats` |
 | Build/asset plumbing | `unit/standalone-assets` |
 
 Suites for removed surface (provider registries, media endpoints, token savers, usage/quota,

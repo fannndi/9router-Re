@@ -1,4 +1,5 @@
 import { COLORS } from "../../utils/stream.js";
+import { recordUsageEvent } from "@/lib/usageStats.js";
 
 const OPTIONAL_PARAMS = [
   "temperature", "top_p", "top_k",
@@ -113,7 +114,7 @@ export function formatDoneLine({ usage, latency }) {
   return `DONE ${latency?.total ?? 0}ms${ttftStr} · ${inStr} · OUT ${outTok}`;
 }
 
-export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, label = "USAGE", silent = false }) {
+export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, pool = null, label = "USAGE", silent = false }) {
   if (!tokens || typeof tokens !== "object") return;
 
   const inTokens = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
@@ -127,4 +128,6 @@ export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, 
     console.log(`${COLORS.green}[${time}] 📊 [${label}] ${provider.toUpperCase()} | in=${inTokens} | out=${outTokens}${accountSuffix}${COLORS.reset}`);
   }
 
+  // Fork-owned: persist one row per successful upstream call with the serving pool.
+  recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens });
 }

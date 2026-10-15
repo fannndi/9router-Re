@@ -4206,6 +4206,162 @@ const STRATEGIES = [
   ],
 };
 
+// ─── pool-usage ────────────────────────────────────────────────────────────
+// Usage page (menu "Usage", /dashboard/pool-usage) built on top of pool-obs:
+//   - one row per upstream call in usageHistory (existing table, no migration):
+//     ok rows carry tokens + the serving pool; fail rows carry pool + reason
+//   - donut: Pool Local / Pool Mobile / Fail (+ direct when failover mode is on)
+//   - per-model table (requests, fails, fail %, tokens) + recent requests
+// The upstream usage/quota stack stays deleted (usage-quota phase); new paths
+// (/dashboard/pool-usage, /api/usage-stats, src/lib/usageStats.js) sit outside
+// that phase's delete list so `verify all` stays green.
+PHASES["pool-usage"] = {
+  title: "usage page: pool/token attribution + /api/usage-stats",
+  patch: [
+    // Fork-owned files are plain additions (like pool-obs's console-log routes):
+    //   src/lib/db/repos/usageStatsRepo.js, src/lib/usageStats.js,
+    //   src/app/api/usage-stats/route.js,
+    //   src/app/(dashboard)/dashboard/pool-usage/{page,PoolUsageClient}.js
+
+    // ── requestDetail.js: ok rows (tokens + serving pool)
+    {
+      file: "open-sse/handlers/chatCore/requestDetail.js",
+      find: `import { COLORS } from "../../utils/stream.js";\n`,
+      replace: `import { COLORS } from "../../utils/stream.js";\nimport { recordUsageEvent } from "@/lib/usageStats.js";\n`,
+      check: `import { recordUsageEvent } from "@/lib/usageStats.js";`,
+    },
+    {
+      file: "open-sse/handlers/chatCore/requestDetail.js",
+      find: `export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, label = "USAGE", silent = false }) {`,
+      replace: `export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, pool = null, label = "USAGE", silent = false }) {`,
+      check: `pool = null, label = "USAGE"`,
+    },
+    {
+      file: "open-sse/handlers/chatCore/requestDetail.js",
+      find: `    console.log(\`\${COLORS.green}[\${time}] 📊 [\${label}] \${provider.toUpperCase()} | in=\${inTokens} | out=\${outTokens}\${accountSuffix}\${COLORS.reset}\`);
+  }
+
+}`,
+      replace: `    console.log(\`\${COLORS.green}[\${time}] 📊 [\${label}] \${provider.toUpperCase()} | in=\${inTokens} | out=\${outTokens}\${accountSuffix}\${COLORS.reset}\`);
+  }
+
+  // Fork-owned: persist one row per successful upstream call with the serving pool.
+  recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens });
+}`,
+      check: `recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens });`,
+    },
+
+    // ── handler call sites: forward the pool tag onto token rows
+    {
+      file: "open-sse/handlers/chatCore/streamingHandler.js",
+      find: `    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE", silent: true });`,
+      replace: `    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, pool: clientRawRequest?._poolName || null, label: "STREAM USAGE", silent: true });`,
+      check: `pool: clientRawRequest?._poolName || null, label: "STREAM USAGE"`,
+    },
+    {
+      file: "open-sse/handlers/chatCore/nonStreamingHandler.js",
+      find: `  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });`,
+      replace: `  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, pool: clientRawRequest?._poolName || null, silent: true });`,
+      check: `pool: clientRawRequest?._poolName || null, silent: true`,
+    },
+    {
+      // Two identical call sites (6-space and 4-space indent) → one rule.
+      file: "open-sse/handlers/chatCore/sseToJsonHandler.js",
+      find: `saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });`,
+      replace: `saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, pool: clientRawRequest?._poolName || null, silent: true });`,
+      allowMultiple: true,
+      check: `pool: clientRawRequest?._poolName || null, silent: true`,
+    },
+
+    // ── chat.js: pool tag per attempt + one fail row per failed attempt
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { noteProxyPoolFailure, noteProxyPoolSuccess, buildPoolPlan, getPoolName, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";`,
+      replace: `import { noteProxyPoolFailure, noteProxyPoolSuccess, buildPoolPlan, getPoolName, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";\nimport { recordUsageEvent } from "@/lib/usageStats.js";`,
+      check: `import { recordUsageEvent } from "@/lib/usageStats.js";`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `    // Use shared chatCore
+    const chatSettings = await getSettings();`,
+      replace: `    // Tag this attempt with the pool that will carry it, so the token rows
+    // written in the chatCore handlers can be attributed (Usage page).
+    if (clientRawRequest) {
+      clientRawRequest._poolName = refreshedCredentials?._poolFailover?.label
+        || credPsd?.connectionProxyPoolName
+        || null;
+    }
+
+    // Use shared chatCore
+    const chatSettings = await getSettings();`,
+      check: `clientRawRequest._poolName = refreshedCredentials?._poolFailover?.label`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `    if (result.success) {
+      const usedPool = credentials._poolFailover || null;`,
+      replace: `    if (!result.success) {
+      // One row per failed attempt (pool + reason) so the Usage page can count
+      // fails per model and per exit IP.
+      recordUsageEvent({
+        ok: false,
+        provider,
+        model,
+        pool: credentials._poolFailover?.label || credPsd?.connectionProxyPoolName || null,
+        poolKey: credentials._poolFailover?.key || null,
+        reason: result.status ? String(result.status) : "transport",
+        endpoint: clientRawRequest?.endpoint || null,
+      });
+    }
+
+    if (result.success) {
+      const usedPool = credentials._poolFailover || null;`,
+      check: `reason: result.status ? String(result.status) : "transport",`,
+    },
+
+    // ── combo.js: zero-content seats count as fails (reason "empty")
+    {
+      file: "open-sse/services/combo.js",
+      find: `import { extractTextContent } from "../translator/formats/gemini.js";`,
+      replace: `import { extractTextContent } from "../translator/formats/gemini.js";\nimport { recordUsageEvent } from "@/lib/usageStats.js";`,
+      check: `import { recordUsageEvent } from "@/lib/usageStats.js";`,
+    },
+    {
+      file: "open-sse/services/combo.js",
+      find: `                log.warn("COMBO", \`Model \${modelStr} returned HTTP 200 with zero usable content, falling back to next model\`);
+                lastError = "Zero usable content";`,
+      replace: `                log.warn("COMBO", \`Model \${modelStr} returned HTTP 200 with zero usable content, falling back to next model\`);
+                recordUsageEvent({ ok: false, provider: modelStr.split("/")[0], model: modelStr.split("/").pop(), reason: "empty" });
+                lastError = "Zero usable content";`,
+      check: `reason: "empty" });`,
+    },
+
+    // ── dashboard nav + header
+    {
+      file: "src/shared/components/Sidebar.js",
+      find: `const navItems = [
+  { href: "/dashboard/endpoint", label: "Endpoint & Key", icon: "api" },`,
+      replace: `const navItems = [
+  { href: "/dashboard/pool-usage", label: "Usage", icon: "bar_chart" },
+  { href: "/dashboard/endpoint", label: "Endpoint & Key", icon: "api" },`,
+      check: `{ href: "/dashboard/pool-usage", label: "Usage", icon: "bar_chart" },`,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `  if (pathname.includes("/console-log"))`,
+      replace: `  if (pathname.includes("/pool-usage"))
+    return {
+      title: "Usage",
+      description: "Requests, proxy pools and token usage",
+      icon: "bar_chart",
+      breadcrumbs: [],
+    };
+  if (pathname.includes("/console-log"))`,
+      check: `title: "Usage",`,
+    },
+  ],
+};
+
 function cmdAudit() {
   // Guards against the one bug class that silently no-ops a rule: a `check`
   // string that is already a substring of `find` (so the rule looks "applied"
