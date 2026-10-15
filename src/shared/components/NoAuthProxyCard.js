@@ -9,6 +9,7 @@ import Badge from "./Badge";
 const NONE_PROXY_POOL_VALUE = "__none__";
 const STRATEGIES = [
   { value: "none", label: "None (single pool)" },
+  { value: "failover", label: "Failover on 429 (direct → pool)" },
   { value: "round-robin", label: "Round-robin" },
   { value: "random", label: "Random" },
 ];
@@ -74,7 +75,14 @@ export default function NoAuthProxyCard({ providerId }) {
   };
 
   const canRotate = proxyPools.length >= 2;
-  const isRotation = rotateStrategy !== "none";
+  const canFailover = proxyPools.length >= 1;
+  const isFailover = rotateStrategy === "failover";
+  const isRotation = rotateStrategy !== "none" && !isFailover;
+  const isStrategyDisabled = (value) => {
+    if (value === "none") return false;
+    if (value === "failover") return !canFailover;
+    return !canRotate;
+  };
 
   return (
     <Card>
@@ -98,7 +106,7 @@ export default function NoAuthProxyCard({ providerId }) {
           { value: NONE_PROXY_POOL_VALUE, label: "None (direct)" },
           ...proxyPools.map((pool) => ({ value: pool.id, label: pool.name })),
         ]}
-        hint={isRotation ? "Pool selector is ignored when rotation is active — all active pools are used." : undefined}
+        hint={isRotation ? "Pool selector is ignored when rotation is active — all active pools are used." : isFailover ? "Requests go direct first; this pool takes over on HTTP 429." : undefined}
       />
 
       <div className="flex flex-col gap-2 mt-4">
@@ -110,19 +118,21 @@ export default function NoAuthProxyCard({ providerId }) {
           className="py-2 px-3 text-sm text-text-main bg-white dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-md focus:ring-1 focus:ring-primary/30 focus:border-primary/50 focus:outline-none transition-all disabled:opacity-50"
         >
           {STRATEGIES.map((s) => (
-            <option key={s.value} value={s.value} disabled={s.value !== "none" && !canRotate}>
+            <option key={s.value} value={s.value} disabled={isStrategyDisabled(s.value)}>
               {s.label}
             </option>
           ))}
         </select>
         <p className="text-xs text-text-muted">
-          {!canRotate
-            ? `Need at least 2 active proxy pools for rotation.`
-            : isRotation
-              ? rotateStrategy === "round-robin"
-                ? `Rotating through all ${proxyPools.length} active pools in order. State is in-memory (resets on restart).`
-                : `Picking a random pool from ${proxyPools.length} active pools each request.`
-              : `Uses the selected pool above. Set to Round-robin or Random to rotate across all active pools.`}
+          {isFailover
+            ? `Requests use the direct connection first. On HTTP 429 the same request is retried through the selected pool, which then rests for a short cooldown.`
+            : !canRotate
+              ? `Need at least 2 active proxy pools for rotation.`
+              : isRotation
+                ? rotateStrategy === "round-robin"
+                  ? `Rotating through all ${proxyPools.length} active pools in order. State is in-memory (resets on restart).`
+                  : `Picking a random pool from ${proxyPools.length} active pools each request.`
+                : `Uses the selected pool above. Set to Round-robin or Random to rotate across all active pools.`}
         </p>
       </div>
     </Card>

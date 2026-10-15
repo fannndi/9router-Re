@@ -1,5 +1,5 @@
-import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
-import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
+import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools, getProxyPoolById } from "@/lib/localDb";
+import { resolveConnectionProxyConfig, pickProxyPoolId, pickChainEntry, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
@@ -16,6 +16,33 @@ function githubMonthlyResetMs(status, errorText, provider) {
   if (!String(errorText || "").toLowerCase().includes(GITHUB_MONTHLY_USAGE_LIMIT)) return null;
   const now = new Date();
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+}
+
+/**
+ * Failover mode (settings.providerStrategies[provider].rotateStrategy ===
+ * "failover") resolves an ordered chain: direct first, then the selected pool.
+ * failoverState.attempted is owned by the chat loop for one client request, so
+ * a retry after a 429 lands on the next chain entry instead of the same wall.
+ *
+ * Returns null when failover is not configured for this provider, so callers
+ * fall back to the connection/rotation behaviour.
+ */
+async function resolveFailoverEntry(providerId, settings, failoverState) {
+  const override = (settings?.providerStrategies || {})[providerId] || {};
+  if (override.rotateStrategy !== "failover") return null;
+
+  const chain = [{ key: DIRECT_POOL_KEY, poolId: null }];
+  const configuredPoolId = String(override.proxyPoolId || "").trim();
+  if (configuredPoolId && configuredPoolId !== "__none__") {
+    const pool = await getProxyPoolById(configuredPoolId);
+    if (pool?.isActive === true && String(pool.proxyUrl || "").trim()) {
+      chain.push({ key: configuredPoolId, poolId: configuredPoolId });
+    }
+  }
+
+  const attempted = failoverState?.attempted instanceof Set ? failoverState.attempted : new Set();
+  const entry = pickChainEntry(chain, attempted) || chain[0];
+  return { ...entry, chainLength: chain.length };
 }
 
 /**
@@ -48,6 +75,34 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const settings = await getSettings();
       const override = (settings.providerStrategies || {})[providerId] || {};
       const strategy = override.rotateStrategy || "none";
+
+      // Failover mode: direct first, selected pool on 429 (per-request chain state).
+      const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState);
+      if (failoverEntry) {
+        const resolvedProxy = await resolveConnectionProxyConfig({
+          proxyPoolId: failoverEntry.poolId || "",
+        });
+        return {
+          id: "noauth",
+          connectionName: "Public",
+          isActive: true,
+          accessToken: "public",
+          providerSpecificData: {
+            connectionProxyEnabled: resolvedProxy.connectionProxyEnabled,
+            connectionProxyUrl: resolvedProxy.connectionProxyUrl,
+            connectionNoProxy: resolvedProxy.connectionNoProxy,
+            connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
+            vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+          },
+          _poolFailover: {
+            enabled: true,
+            key: failoverEntry.key,
+            poolId: failoverEntry.poolId || null,
+            chainLength: failoverEntry.chainLength,
+          },
+        };
+      }
+
       let pickedId = override.proxyPoolId || null;
       if (strategy !== "none") {
         const allPools = await getProxyPools({ isActive: true });
@@ -199,7 +254,10 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       connection = availableConnections[0];
     }
 
-    const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+    const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState);
+    const resolvedProxy = failoverEntry
+      ? await resolveConnectionProxyConfig({ proxyPoolId: failoverEntry.poolId || "" })
+      : await resolveConnectionProxyConfig(connection.providerSpecificData || {});
 
     return {
       authType: connection.authType,
@@ -227,7 +285,16 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       testStatus: connection.testStatus,
       lastError: connection.lastError,
       // Pass full connection for clearAccountError to read modelLock_* keys
-      _connection: connection
+      _connection: connection,
+      // Failover mode bookkeeping for the chat loop (see resolveFailoverEntry)
+      _poolFailover: failoverEntry
+        ? {
+            enabled: true,
+            key: failoverEntry.key,
+            poolId: failoverEntry.poolId || null,
+            chainLength: failoverEntry.chainLength,
+          }
+        : null,
     };
   } finally {
     if (resolveMutex) resolveMutex();

@@ -26,6 +26,27 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
+import { noteProxyPoolFailure, noteProxyPoolSuccess } from "@/lib/network/connectionProxy";
+
+/**
+ * Retry-After of a failed upstream response, in milliseconds (0 when absent).
+ * Providers that answer a rate limit with a reset hint (OpenCode Zen sends a
+ * daily-window Retry-After) get an honest pool cooldown out of it; the cap
+ * lives in noteProxyPoolFailure.
+ */
+function poolRetryAfterMs(result) {
+  const headers = upstreamResponseHeaders(result?.response?.headers);
+  const raw = headers["retry-after"];
+  if (raw) {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+    const when = Date.parse(raw);
+    if (!Number.isNaN(when)) return Math.max(0, when - Date.now());
+  }
+  const resetsAt = Number(result?.resetsAtMs);
+  if (Number.isFinite(resetsAt) && resetsAt > Date.now()) return resetsAt - Date.now();
+  return 0;
+}
 
 /**
  * Handle chat completion request
@@ -239,12 +260,15 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
+  // Pool-failover state for this request: which chain entries (direct / pools)
+  // were already tried. See resolveFailoverEntry in services/auth.js.
+  const failoverState = { attempted: new Set(), bestError: null };
   let lastError = null;
   let lastStatus = null;
   let lastHeaders = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model, failoverState });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -322,7 +346,53 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
     });
 
-    if (result.success) return result.response;
+    if (result.success) {
+      if (credentials._poolFailover) noteProxyPoolSuccess(credentials._poolFailover.key);
+      return result.response;
+    }
+
+    // Pool failover: a 429 belongs to the exit IP, not to the credential, so
+    // retry the same request through the next chain entry (usually the mobile
+    // pool) before locking the account. 5xx and transport failures move on the
+    // same way; the failed entry just cools down so later requests skip it.
+    // Anything else (bad request, auth error) is not about the exit IP and
+    // falls through to the account-level logic unchanged.
+    const poolFailover = credentials._poolFailover || null;
+    const poolWorthyFailure = result.status === 429 || result.status >= 500 || !result.status;
+    if (poolFailover?.enabled && poolWorthyFailure) {
+      failoverState.attempted.add(poolFailover.key);
+      if (result.status === 429 && !failoverState.bestError) {
+        failoverState.bestError = {
+          status: result.status,
+          error: result.error,
+          headers: upstreamResponseHeaders(result.response?.headers),
+        };
+      }
+      noteProxyPoolFailure(poolFailover.key, result.status, result.error, poolRetryAfterMs(result));
+      if (failoverState.attempted.size < poolFailover.chainLength) {
+        log.warn("FALLBACK", `⇄ POOL:${poolFailover.key} UNAVAILABLE (${result.status}) → NEXT POOL`);
+        lastError = result.error;
+        lastStatus = result.status;
+        lastHeaders = upstreamResponseHeaders(result.response?.headers);
+        continue;
+      }
+    }
+
+    // Chain exhausted for a no-auth provider: a dead pool must not hide the
+    // rate limit that started the failover. Hand back the 429 (with its reset
+    // hint) instead of the transport error from the dead entry.
+    if (
+      poolFailover?.enabled &&
+      credentials.id === "noauth" &&
+      failoverState.bestError &&
+      (result.status >= 500 || !result.status)
+    ) {
+      return errorResponse(
+        failoverState.bestError.status,
+        failoverState.bestError.error,
+        failoverState.bestError.headers
+      );
+    }
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;
