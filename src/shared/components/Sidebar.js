@@ -12,17 +12,14 @@ const navItems = [
   { href: "/dashboard/providers", label: "Providers", icon: "dns" },
   // { href: "/dashboard/basic-chat", label: "Basic Chat", icon: "chat" }, // Hidden
   { href: "/dashboard/combos", label: "Combo & Vision Adapter", icon: "layers" },
-  // { href: "/dashboard/pxpipe", label: "PXPIPE", icon: "image" },
 ];
 
 const debugItems = [
   { href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },
-  { href: "/dashboard/translator", label: "Translator", icon: "translate" },
 ];
 
 const systemItems = [
   { href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan" },
-  { href: "/dashboard/skills", label: "Skills", icon: "extension" },
 ];
 
 export default function Sidebar({ onClose }) {

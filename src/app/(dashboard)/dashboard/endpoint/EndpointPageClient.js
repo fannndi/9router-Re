@@ -30,6 +30,12 @@ export default function APIPageClient({ machineId }) {
 
   const { copied, copy } = useCopyToClipboard();
 
+  // Mount fetch: the tunnel status poll above used to be the only effect here.
+  useEffect(() => {
+    fetchData();
+    loadSettings();
+  }, []);
+
   const loadSettings = async () => {
     try {
       const settingsData = await useSettingsStore.getState().fetchSettings();

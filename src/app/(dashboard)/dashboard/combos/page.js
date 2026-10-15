@@ -18,16 +18,11 @@ const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
 // to the first enabled model here instead of erroring or dropping the data.
 const CAPACITY_ADAPTER_CAPS = [
   { key: "vision", label: "Vision", icon: "visibility", desc: "images (png, jpg, webp, …)" },
-  // pdf, videoInput temporarily hidden — no translator support yet for those blocks.
-  { key: "audioInput", label: "Audio", icon: "graphic_eq", desc: "audio input" },
 ];
 const DEFAULT_FALLBACK_MODEL = "oc/mimo-v2.6-flash-free";
 const EMPTY_CAP_ENTRY = { enabled: true, roundRobin: false, models: [] };
 const EMPTY_CAPACITY_ADAPTER = {
   vision: { ...EMPTY_CAP_ENTRY },
-  pdf: { ...EMPTY_CAP_ENTRY },
-  audioInput: { ...EMPTY_CAP_ENTRY },
-  videoInput: { ...EMPTY_CAP_ENTRY },
 };
 const upgradeLegacyModel = (m) => (m === "oc/mimo-v2.5-free" ? DEFAULT_FALLBACK_MODEL : m);
 

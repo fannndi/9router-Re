@@ -466,7 +466,7 @@ import useSettingsStore from "@/store/settingsStore";`,
   "/api/settings/require-login",`,
         replace: `  "/api/auth/saml",
   "/api/settings/require-login",`,
-        check: `  "/api/settings/require-login",`,
+        checkAbsent: true,
       },
       {
         file: "src/dashboardGuard.js",
@@ -479,7 +479,7 @@ import useSettingsStore from "@/store/settingsStore";`,
         replace: `const ALWAYS_PROTECTED = [
   "/api/settings/database",
 `,
-        check: `const ALWAYS_PROTECTED = [`,
+        checkAbsent: true,
       },
       {
         file: "src/shared/constants/config.js",
@@ -578,7 +578,7 @@ import { pingModelByKind } from "@/app/api/models/test/ping";`,
         find: `import ChangelogModal from "./ChangelogModal";
 import { ConfirmModal } from "./Modal";`,
         replace: `import ChangelogModal from "./ChangelogModal";`,
-        check: `import ChangelogModal from "./ChangelogModal";`,
+        checkAbsent: true,
       },
       {
         file: "src/app/api/cli-tools/cowork-settings/route.js",
@@ -1095,7 +1095,7 @@ const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "trave
         replace: `const CAPACITY_ADAPTER_CAPS = [
   { key: "vision", label: "Vision", icon: "visibility", desc: "images (png, jpg, webp, …)" },
 ];`,
-        check: `const CAPACITY_ADAPTER_CAPS = [`,
+        checkAbsent: true,
       },
       {
         file: "src/app/(dashboard)/dashboard/combos/page.js",
@@ -1108,7 +1108,7 @@ const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "trave
         replace: `const EMPTY_CAPACITY_ADAPTER = {
   vision: { ...EMPTY_CAP_ENTRY },
 };`,
-        check: `const EMPTY_CAPACITY_ADAPTER = {`,
+        checkAbsent: true,
       },
     ],
   },
@@ -1533,7 +1533,7 @@ import { compressWithPxpipe } from "../rtk/pxpipe.js";
         file: "open-sse/handlers/chatCore.js",
         find: `  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };`,
         replace: `  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqTag, log };`,
-        check: `const sharedCtx = {`,
+        checkAbsent: true,
       },
       {
         file: "src/sse/handlers/chat.js",
@@ -1603,6 +1603,13 @@ import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
       {
         file: "src/shared/components/Sidebar.js",
         find: `  { href: "/dashboard/token-saver", label: "Token Saver", icon: "savings" },
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `  // { href: "/dashboard/pxpipe", label: "PXPIPE", icon: "image" },
 `,
         replace: "",
         checkAbsent: true,
@@ -1738,7 +1745,7 @@ export async function GET() {
           setSamlConfigured(data.samlConfigured === true);
           setSamlLoginLabel(data.samlLoginLabel || "Sign in with SAML SSO");`,
         replace: `          setHasPassword(!!data.hasPassword);`,
-        check: `setHasPassword(!!data.hasPassword);`,
+        checkAbsent: true,
       },
       {
         file: "src/app/login/page.js",
@@ -2151,6 +2158,21 @@ export default initializeApp;
       },
       {
         file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `  const { copied, copy } = useCopyToClipboard();
+`,
+        replace: `  const { copied, copy } = useCopyToClipboard();
+
+  // Mount fetch: the tunnel status poll above used to be the only effect here.
+  useEffect(() => {
+    fetchData();
+    loadSettings();
+  }, []);
+`,
+        check: `fetchData();
+    loadSettings();`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
         find: `const pingTunnelHealth = async (...urls) => {`,
         cutTo: `  const handleCreateKey = async () => {`,
       },
@@ -2389,7 +2411,7 @@ export async function refreshXaiToken() {
         file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
         find: `import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, ZedAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
         replace: `import { Card, Button, Modal, CardSkeleton, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
-        check: `NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
+        checkAbsent: true,
       },
       {
         file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
@@ -2633,7 +2655,7 @@ export const config = {
 `,
         replace: `  { href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },
 `,
-        check: `{ href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },`,
+        checkAbsent: true,
       },
       {
         file: "src/shared/components/Sidebar.js",
@@ -2642,7 +2664,7 @@ export const config = {
 `,
         replace: `  { href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan" },
 `,
-        check: `{ href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan" },`,
+        checkAbsent: true,
       },
       {
         file: "src/shared/components/Sidebar.js",
@@ -2888,7 +2910,7 @@ export const GITHUB_CONFIG = {
     "cli:pack": "npm --prefix cli run pack:cli",
     "cli:publish": "npm --prefix cli run publish:cli"`,
         replace: `    "start:bun": "bun ./.next/standalone/custom-server.js"`,
-        check: `"start:bun": "bun ./.next/standalone/custom-server.js"`,
+        checkAbsent: true,
       },
     ],
   },
@@ -2896,11 +2918,38 @@ export const GITHUB_CONFIG = {
 
 // ─── cli ───────────────────────────────────────────────────────────────────
 
+function cmdAudit() {
+  // Guards against the one bug class that silently no-ops a rule: a `check`
+  // string that is already a substring of `find` (so the rule looks "applied"
+  // before it ever runs). Insertion-style rules must use a check that only
+  // exists AFTER the patch — or checkAbsent.
+  let flagged = 0;
+  for (const [id, phase] of Object.entries(PHASES)) {
+    for (const rule of phase.patch || []) {
+      if (!rule.find || !rule.check) continue;
+      if (rule.checkAbsent) continue;
+      if (rule.find.includes(rule.check)) {
+        flagged++;
+        console.log(c.red(`✗ ${id}: ${rule.file}`));
+        console.log(c.dim(`    check ⊂ find → rule would be skipped`));
+        console.log(c.dim(`    check: ${JSON.stringify(rule.check.slice(0, 80))}`));
+      }
+    }
+  }
+  if (flagged) {
+    console.log(c.red(`\n${flagged} rule(s) need checkAbsent or a post-apply check.`));
+    process.exitCode = 1;
+  } else {
+    console.log(c.green("✓ no rule has a check that is a substring of its find"));
+  }
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 try {
   if (!cmd || cmd === "list") cmdList();
   else if (cmd === "apply") cmdApply(rest);
   else if (cmd === "verify") cmdVerify(rest);
+  else if (cmd === "audit") cmdAudit();
   else {
     console.log(`usage: node scripts/lean.mjs <list|apply|verify> [phase…|all] [--dry]`);
     process.exitCode = 1;

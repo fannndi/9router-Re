@@ -39,12 +39,6 @@ export default function LoginPage() {
             return;
           }
           setHasPassword(!!data.hasPassword);
-          setAuthMode(data.authMode || "password");
-          setSsoType(data.ssoType || "oidc");
-          setOidcConfigured(data.oidcConfigured === true);
-          setOidcLoginLabel(data.oidcLoginLabel || "Sign in with OIDC");
-          setSamlConfigured(data.samlConfigured === true);
-          setSamlLoginLabel(data.samlLoginLabel || "Sign in with SAML SSO");
         } else {
           // Safe fallback on non-OK response to avoid infinite loading state.
           setHasPassword(true);
