@@ -46,7 +46,6 @@ function envUrl(name, def) {
 
 // SearXNG endpoint used by the unauthenticated web-search provider.
 // Configure this for a separate Docker service or remote SearXNG instance.
-export const SEARXNG_URL = envUrl("SEARXNG_URL", "http://localhost:8888/search");
 
 // Inter-chunk stall timeout (once tokens are flowing). Generous headroom so
 // slow reasoning models aren't aborted mid-stream. Env: STREAM_STALL_TIMEOUT_MS.
@@ -59,13 +58,11 @@ export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_M
 export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 60 * 1000);
 
 // Gemini native TTS fetch timeout: abort if Google does not return response headers in time.
-export const GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS = envMs("GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS", 45 * 1000);
 
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;
 export const DEFAULT_MIN_TOKENS = 32000;
 
-export const TOKEN_SAVER_HEADER = "x-9router-token-saver";
 
 // Retry config for 429 responses (legacy - kept for backward compatibility)
 export const RETRY_CONFIG = {

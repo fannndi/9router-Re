@@ -26,14 +26,15 @@ vi.mock("next/server", () => ({
 
 const originalFetch = global.fetch;
 
-describe("model test route kind routing", () => {
+// Lean fork: every model kind this gateway serves is a chat model, so the probe
+// always goes through /v1/chat/completions.
+describe("model test route (chat probe)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getApiKeys.mockResolvedValue([{ key: "sk-internal", isActive: true }]);
     mocks.getConsistentMachineId.mockResolvedValue("cli-token");
     global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      created: 1,
-      data: [{ b64_json: "abc" }],
+      choices: [{ message: { content: "hi" }, finish_reason: "stop" }],
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -44,16 +45,13 @@ describe("model test route kind routing", () => {
     global.fetch = originalFetch;
   });
 
-  it("routes image model tests to /api/v1/images/generations", async () => {
+  it("routes model tests to /api/v1/chat/completions with a reasoning-safe budget", async () => {
     const { POST } = await import("../../src/app/api/models/test/route.js");
 
     const req = new Request("http://localhost/api/models/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "hf/black-forest-labs/FLUX.1-schnell",
-        kind: "image",
-      }),
+      body: JSON.stringify({ model: "oc/step-5-preview-free", kind: "llm" }),
     });
 
     const res = await POST(req);
@@ -61,111 +59,20 @@ describe("model test route kind routing", () => {
 
     expect(body.ok).toBe(true);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/images/generations"),
+      expect.stringContaining("/api/v1/chat/completions"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          model: "hf/black-forest-labs/FLUX.1-schnell",
-          prompt: "test",
+          model: "oc/step-5-preview-free",
+          max_tokens: 1024,
+          stream: false,
+          messages: [{ role: "user", content: "hi" }],
         }),
       })
     );
   });
 
-  it("routes embedding model tests to /api/v1/embeddings", async () => {
-    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: [{ embedding: [0.1, 0.2] }],
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
-
-    const { POST } = await import("../../src/app/api/models/test/route.js");
-
-    const req = new Request("http://localhost/api/models/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "voyage/voyage-3-large",
-        kind: "embedding",
-      }),
-    });
-
-    const res = await POST(req);
-    const body = await res.json();
-
-    expect(body.ok).toBe(true);
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/embeddings"),
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          model: "voyage/voyage-3-large",
-          input: "test",
-        }),
-      })
-    );
-  });
-
-  it("fails embedding model tests when provider returns no embedding data", async () => {
-    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: [{ embedding: null }],
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
-
-    const { POST } = await import("../../src/app/api/models/test/route.js");
-
-    const req = new Request("http://localhost/api/models/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "voyage/voyage-3-large",
-        kind: "embedding",
-      }),
-    });
-
-    const res = await POST(req);
-    const body = await res.json();
-
-    expect(body.ok).toBe(false);
-    expect(body.error).toBe("Provider returned no embedding data");
-  });
-
-  it("routes stt model tests to /api/v1/audio/transcriptions", async () => {
-    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      text: "test",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
-
-    const { POST } = await import("../../src/app/api/models/test/route.js");
-
-    const req = new Request("http://localhost/api/models/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "hf/openai/whisper-small",
-        kind: "stt",
-      }),
-    });
-
-    const res = await POST(req);
-    const body = await res.json();
-
-    expect(body.ok).toBe(true);
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/audio/transcriptions"),
-      expect.objectContaining({
-        method: "POST",
-        body: expect.any(FormData),
-      })
-    );
-  });
-
-  it("returns formatted HTTP errors for non-2xx embedding responses", async () => {
+  it("returns formatted HTTP errors for non-2xx responses", async () => {
     global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       error: { message: "bad upstream" },
     }), {
@@ -178,10 +85,7 @@ describe("model test route kind routing", () => {
     const req = new Request("http://localhost/api/models/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "voyage/voyage-3-large",
-        kind: "embedding",
-      }),
+      body: JSON.stringify({ model: "oc/step-5-preview-free", kind: "llm" }),
     });
 
     const res = await POST(req);
@@ -190,5 +94,49 @@ describe("model test route kind routing", () => {
     expect(body.ok).toBe(false);
     expect(body.status).toBe(502);
     expect(body.error).toBe("HTTP 502: bad upstream");
+  });
+
+  it("soft-passes a reasoning-only (length-limited) response", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "", reasoning_content: "thinking..." }, finish_reason: "length" }],
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    const { POST } = await import("../../src/app/api/models/test/route.js");
+
+    const req = new Request("http://localhost/api/models/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "oc/space-bunny-free", kind: "llm" }),
+    });
+
+    const res = await POST(req);
+    const body = await res.json();
+
+    expect(body.ok).toBe(true);
+    expect(body.note).toBe("reasoning-only response (length-limited)");
+  });
+
+  it("fails when the probe returns no choices", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    const { POST } = await import("../../src/app/api/models/test/route.js");
+
+    const req = new Request("http://localhost/api/models/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "oc/step-5-preview-free", kind: "llm" }),
+    });
+
+    const res = await POST(req);
+    const body = await res.json();
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("Provider returned no completion choices for this model");
   });
 });

@@ -1,52 +1,53 @@
-# 9Router Embeddings Tests
+# Tests
 
-Unit tests for the `/v1/embeddings` endpoint implementation.
+Vitest suites for the lean fork. Two trees:
 
-## Setup
-
-Install test dependencies from the `tests/` directory:
-
-```bash
-cd tests/ && npm install
+```
+tests/
+├── unit/        # 100+ focused files (db, auth, keys, combos, capabilities, engine bits)
+└── translator/  # data-driven coverage of the format-translation layer
+    └── real/    # live-provider suites, gated behind RUN_REAL=1
 ```
 
-## Running Tests
+`tests/package.json` installs vitest locally (own `node_modules`). Always run from `tests/`
+so `vitest.config.js` (which maps `@/` → `../src` and `open-sse/` → `../open-sse`) applies.
 
-From the `tests/` directory:
-
-```bash
-npm test
-```
-
-Or run vitest directly with npx:
+## Run
 
 ```bash
-npx vitest run --reporter=verbose --config ./vitest.config.js
+cd tests
+npm install          # once
+npx vitest run       # everything that does not need credentials
+npx vitest run unit/proxy-pool-failover.test.js     # a single file
+npx vitest run --reporter=verbose
 ```
 
-## Test Files
+The default run is offline: no network, no credentials. The `translator/real/*` suites are
+skipped unless you export `RUN_REAL=1`; they then read active connections from
+`~/.9router/db/data.sqlite` and hit the live upstreams (only useful against a real
+deployment — on this fork that means the OpenCode Free connection).
 
-| File | What it tests |
-|------|--------------|
-| `unit/embeddingsCore.test.js` | `open-sse/handlers/embeddingsCore.js` — core logic: body builder, URL router, headers, handler flow |
-| `unit/embeddings.cloud.test.js` | `cloud/src/handlers/embeddings.js` — cloud worker handler: auth, validation, rate limits, CORS |
+## What is covered where
 
-## Coverage Summary (59 tests)
+| Area | Files |
+|---|---|
+| 429 → proxy-pool failover, strict proxy, SSRF guard | `unit/proxy-pool-failover`, `unit/strict-proxy-enforcement`, `unit/ssrf-guard-hardening` |
+| Chat path: streaming, SSE→JSON, usage extraction, claude cloaking, tool dedupe, session/fingerprint | `unit/claude-*`, `unit/cached-token-usage`, `unit/extract-usage-cache-shapes`, `unit/session-manager`, `unit/opencode-*`, `unit/tool-deduper` |
+| Format translation (kept pairs) | `translator/*` + `unit/gemini-*`, `unit/openai-to-claude-*`, `unit/responses-*`, `unit/thinking-*` |
+| Combos (routing, fusion, capabilities) | `unit/combo-*` |
+| Dashboard/API surface: keys, auth status, model lookup, provider validation, quirks | `unit/auth-status`, `unit/tenant-*`-style API tests, `unit/model-*`, `unit/compatible-provider-connections`, `unit/bulk-add-names` |
+| DB + migrations | `unit/db-migration-chain`, `unit/key-access-migration` |
+| Build/asset plumbing | `unit/standalone-assets` |
 
-### `embeddingsCore.test.js` (36 tests)
-- `buildEmbeddingsBody`: single string, array, encoding_format, default float
-- `buildEmbeddingsUrl`: openai, openrouter, openai-compatible-*, unsupported providers
-- `buildEmbeddingsHeaders`: per-provider header sets, fallback to accessToken
-- `handleEmbeddingsCore` input validation: missing, wrong type, null, empty
-- `handleEmbeddingsCore` success: response format, CORS, Content-Type, callbacks
-- `handleEmbeddingsCore` errors: 400/429/500, network error, invalid JSON
-- `handleEmbeddingsCore` token refresh: 401 retry, graceful fallback
+Suites for removed surface (provider registries, media endpoints, token savers, usage/quota,
+i18n, relay deploys) were deleted together with the features — see `LEAN.md`.
 
-### `embeddings.cloud.test.js` (23 tests)
-- CORS OPTIONS: 200 response, empty body, correct headers
-- Authentication: missing key, bad format, old-format key, wrong key value, valid key
-- Body validation: invalid JSON, missing model, missing input, bad model
-- Happy path: single string, array, correct delegation, CORS header, machineId override
-- Rate limiting: all accounts rate-limited → 503 + Retry-After, no credentials → 400
-- Error propagation: non-fallback errors passed through, 429 exhausts accounts
-- machineId override: validates key, rejects wrong key
+## Conventions
+
+- Plain ESM + `vitest`; no setup file. Handlers under test call a patched global `fetch`
+  (see `open-sse/utils/proxyFetch.js`) — mock `global.fetch` per file like the existing
+  suites do.
+- `it.fails(...)` marks a confirmed-but-unfixed bug (passes while the bug exists, turns red
+  when fixed) — see `translator/AGENTS.md`.
+- After changing anything in `open-sse/` or `src/`, run the full suite before the build:
+  `node scripts/lean.mjs audit && node scripts/lean.mjs verify all` from the repo root first.

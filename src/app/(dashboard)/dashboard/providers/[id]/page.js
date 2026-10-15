@@ -11,7 +11,6 @@ import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
-import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
 import ModelRow from "./ModelRow";
@@ -21,18 +20,9 @@ import ConnectionRow from "./ConnectionRow";
 import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
-import BulkImportCodexModal from "./BulkImportCodexModal";
-import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
-import AutoPingScheduleModal from "./AutoPingScheduleModal";
-import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
-
-const AUTO_PING_SETTINGS_KEYS = {
-  claude: "claudeAutoPing",
-  codex: "codexAutoPing",
-};
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,12 +38,8 @@ export default function ProviderDetailPage() {
   const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
   const [showOAuthModal, setShowOAuthModal] = useState(false);
-  const [showXiaomiMimoModal, setShowXiaomiMimoModal] = useState(false);
-  const [showIFlowCookieModal, setShowIFlowCookieModal] = useState(false);
   const [showAddApiKeyModal, setShowAddApiKeyModal] = useState(false);
   const [addConnectionError, setAddConnectionError] = useState("");
-  const [showBulkImportCodex, setShowBulkImportCodex] = useState(false);
-  const [showBulkImportGrokCli, setShowBulkImportGrokCli] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showEditNodeModal, setShowEditNodeModal] = useState(false);
   const [showBulkProxyModal, setShowBulkProxyModal] = useState(false);
@@ -71,45 +57,23 @@ export default function ProviderDetailPage() {
   const [providerStrategy, setProviderStrategy] = useState(null);
   const [providerStickyLimit, setProviderStickyLimit] = useState("");
   const [thinkingMode, setThinkingMode] = useState("auto");
-  const [autoPing, setAutoPing] = useState({ enabled: false, connections: {}, schedules: {} });
-  const [scheduleConnection, setScheduleConnection] = useState(null);
   const [suggestedModels, setSuggestedModels] = useState([]);
-  const [liveModels, setLiveModels] = useState([]);
-  // Live-catalog fetch warning/error (surfaced for zed only; cursor behavior unchanged).
-  const [liveModelsError, setLiveModelsError] = useState(null);
-  const [kiloFreeModels, setKiloFreeModels] = useState([]);
   const [disabledModelIds, setDisabledModelIds] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
-  const [showAgRiskModal, setShowAgRiskModal] = useState(false);
   const [oneByOneRunning, setOneByOneRunning] = useState(false);
   const [oneByOneStopping, setOneByOneStopping] = useState(false);
   const [oneByOneCurrentConnectionId, setOneByOneCurrentConnectionId] = useState(null);
   const [oneByOneResults, setOneByOneResults] = useState({});
   const [oneByOneSummary, setOneByOneSummary] = useState(null);
   const stopOneByOneRef = useRef(false);
-  const [importingQoderModels, setImportingQoderModels] = useState(false);
-  const [importingClineModels, setImportingClineModels] = useState(false);
   const { copied, copy } = useCopyToClipboard();
 
-  const AG_RISK_STORAGE_KEY = "ag_risk_confirmed";
 
   const openOAuthConnection = () => {
     setShowOAuthModal(true);
   };
 
   const triggerOAuthConnection = () => {
-    if (providerId === "antigravity" && typeof window !== "undefined") {
-      const confirmed = window.localStorage.getItem(AG_RISK_STORAGE_KEY) === "true";
-      if (!confirmed) {
-        setShowAgRiskModal(true);
-        return;
-      }
-    }
-    // Xiaomi Desktop: auto-import local credentials first, OAuth as fallback
-    if (providerId === "xiaomi-mimo") {
-      setShowXiaomiMimoModal(true);
-      return;
-    }
     if (isOAuth) {
       openOAuthConnection();
       return;
@@ -131,18 +95,6 @@ export default function ProviderDetailPage() {
     triggerApiKeyConnection();
   };
 
-  const handleAgRiskConfirm = () => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(AG_RISK_STORAGE_KEY, "true");
-    }
-    setShowAgRiskModal(false);
-    if (isOAuth) {
-      openOAuthConnection();
-      return;
-    }
-    triggerApiKeyConnection();
-  };
-
   const providerInfo = providerNode
     ? {
         id: providerNode.id,
@@ -159,25 +111,15 @@ export default function ProviderDetailPage() {
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = (providerId === "cursor" || providerId === "zed") && liveModels.length > 0
-    ? liveModels
-    : staticModels;
+  const models = staticModels;
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
   const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
   const isCompatible = isOpenAICompatible || isAnthropicCompatible;
   const hasDualAuthModes = !isCompatible && isOAuth && supportsApiKeyAuth;
-  const oauthConnectionLabel =
-    providerId === "xai" ? "Grok Build OAuth"
-    : providerId === "grok-cli" ? "Grok CLI Device Login"
-    : providerId === "kimi" ? "Kimi Coding OAuth"
-    : "OAuth";
-  const apiKeyConnectionLabel =
-    providerId === "xai" ? "xAI API Key"
-    : providerId === "kimi" ? "Kimi API Key"
-    : (providerId === "qoder" || providerId === "qoder-cn") ? "PAT"
-    : "API Key";
+  const oauthConnectionLabel = "OAuth";
+  const apiKeyConnectionLabel = "API Key";
   // Resolve suffix "(level)" for a model when a thinking level is picked and the model supports it.
   const resolveThinkingSuffix = (modelId) => {
     if (!thinkingMode || thinkingMode === "auto") return null;
@@ -197,7 +139,6 @@ export default function ProviderDetailPage() {
       if (lv) lv.forEach((l) => { if (l !== "none") set.add(l); });
     };
     for (const m of models) addLevels(m.id);
-    for (const m of kiloFreeModels) addLevels(m.id);
     for (const entry of customModels) {
       if (entry.providerAlias !== providerStorageAlias) continue;
       if ((entry.kind || entry.type || "llm") !== "llm") continue;
@@ -296,15 +237,6 @@ export default function ProviderDetailPage() {
     }
   }, []);
 
-  // Fetch free models from Kilo API for kilocode provider
-  useEffect(() => {
-    if (providerId !== "kilocode") return;
-    fetch("/api/providers/kilo/free-models")
-      .then((res) => res.json())
-      .then((data) => { if (data.models?.length) setKiloFreeModels(data.models); })
-      .catch(() => {});
-  }, [providerId]);
-
   const fetchConnections = useCallback(async () => {
     try {
       const [connectionsRes, nodesRes, proxyPoolsRes, settingsRes] = await Promise.all([
@@ -331,9 +263,6 @@ export default function ProviderDetailPage() {
       // Load per-provider thinking config
       const thinkingCfg = (settingsData.providerThinking || {})[providerId] || {};
       setThinkingMode(thinkingCfg.mode || "auto");
-      const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[providerId];
-      const apCfg = autoPingSettingsKey ? settingsData[autoPingSettingsKey] || {} : {};
-      setAutoPing({ enabled: apCfg.enabled === true, connections: apCfg.connections || {}, schedules: apCfg.schedules || {} });
       if (nodesRes.ok) {
         let node = (nodesData.nodes || []).find((entry) => entry.id === providerId) || null;
 
@@ -446,80 +375,12 @@ export default function ProviderDetailPage() {
     saveThinkingConfig(mode);
   };
 
-  const saveAutoPing = async (next) => {
-    const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[providerId];
-    if (!autoPingSettingsKey) return;
-
-    setAutoPing(next);
-    try {
-      await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [autoPingSettingsKey]: next }),
-      });
-    } catch (error) {
-      console.log("Error saving auto-ping config:", error);
-    }
-  };
-
-  const handleSaveAutoPing = (connectionId, { reactive, schedule }) => {
-    saveAutoPing({
-      ...autoPing,
-      connections: { ...autoPing.connections, [connectionId]: reactive },
-      schedules: { ...autoPing.schedules, [connectionId]: schedule },
-    });
-  };
-
   useEffect(() => {
     fetchConnections();
     fetchAliases();
     fetchCustomModels();
     fetchDisabledModels();
   }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
-
-  // Live per-connection catalogs (cursor, zed): the static registry carries
-  // no usable list, so resolve from the active connection. Fires only when
-  // the provider id or connection list changes — no polling, no loop.
-  // Cursor path is statement-identical to before; zed adds error surfacing.
-  useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
-    if (!isLiveCatalog) {
-      setLiveModels([]);
-      return;
-    }
-
-    const connection = connections.find((item) => item.isActive !== false);
-    if (!connection?.id) {
-      setLiveModels([]);
-      if (providerId === "zed") setLiveModelsError(null);
-      return;
-    }
-
-    let cancelled = false;
-    if (providerId === "zed") setLiveModelsError(null);
-    fetch(`/api/providers/${connection.id}/models`, { cache: "no-store" })
-      .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => null) }))
-      .then(({ ok, data }) => {
-        if (cancelled) return;
-        if (ok && Array.isArray(data?.models) && data.models.length > 0) {
-          setLiveModels(data.models);
-          if (providerId === "zed" && data?.warning) setLiveModelsError(data.warning);
-          return;
-        }
-        if (providerId === "zed") {
-          setLiveModels([]);
-          setLiveModelsError(data?.warning || data?.error || "Zed returned no live models.");
-        }
-      })
-      .catch(() => {
-        if (!cancelled && providerId === "zed") {
-          setLiveModels([]);
-          setLiveModelsError("Failed to reach the Zed model catalog.");
-        }
-      });
-
-    return () => { cancelled = true; };
-  }, [providerId, connections]);
 
   // Fetch suggested models from provider's public API (if configured)
   useEffect(() => {
@@ -591,108 +452,6 @@ export default function ProviderDetailPage() {
       }
     } catch (error) {
       console.log("Error deleting custom model:", error);
-    }
-  };
-
-  // Fetch Qoder model list and automatically add to available models
-  const handleImportQoderModels = async () => {
-    if (importingQoderModels) return;
-    const activeConnection = connections.find((conn) => conn.isActive !== false);
-    if (!activeConnection) {
-      alert(translate("Please add an active Qoder connection first"));
-      return;
-    }
-
-    setImportingQoderModels(true);
-    try {
-      const res = await fetch(`/api/providers/${activeConnection.id}/models`);
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || translate("Failed to fetch models"));
-        return;
-      }
-      const models = data.models || [];
-      if (models.length === 0) {
-        alert(translate("No models returned"));
-        return;
-      }
-
-      let importedCount = 0;
-      for (const model of models) {
-        const modelId = model.id || model.name;
-        if (!modelId) continue;
-        
-        // Qoder model ID format may be "qoder/auto", "qoder-cn/auto" or "auto",
-        // need to remove the provider prefix before storing.
-        const cleanModelId = modelId.replace(/^(qoder-cn|qoder)\//, "");
-        const alreadyExists = customModels.some(
-          (entry) => entry.providerAlias === providerStorageAlias && entry.id === cleanModelId && (entry.kind || entry.type || "llm") === "llm"
-        ) || Object.values(modelAliases).includes(`${providerStorageAlias}/${cleanModelId}`);
-        if (alreadyExists) {
-          continue;
-        }
-
-        await handleAddCustomModel(cleanModelId, "llm", providerStorageAlias);
-        importedCount += 1;
-      }
-      
-      if (importedCount === 0) {
-        alert(translate("All models already exist, no new models added"));
-      } else {
-        alert(translate("Successfully added") + ` ${importedCount} ` + translate("models"));
-      }
-    } catch (error) {
-      console.log("Error importing Qoder models:", error);
-      alert(translate("Error fetching models") + ": " + error.message);
-    } finally {
-      setImportingQoderModels(false);
-    }
-  };
-  // Fetch the live Cline /models catalog and add every model not yet present.
-  // Cline and ClinePass share the same catalog endpoint (api.cline.bot/api/v1/models).
-  const handleImportClineModels = async () => {
-    if (importingClineModels) return;
-    const activeConnection = connections.find((conn) => conn.isActive !== false);
-    if (!activeConnection) {
-      alert(translate("Please add an active Cline connection first"));
-      return;
-    }
-    setImportingClineModels(true);
-    try {
-      const res = await fetch(`/api/providers/${activeConnection.id}/models`);
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || translate("Failed to fetch models"));
-        return;
-      }
-      const models = data.models || [];
-      if (models.length === 0) {
-        alert(translate("No models returned"));
-        return;
-      }
-      let importedCount = 0;
-      for (const model of models) {
-        const modelId = model.id || model.name;
-        if (!modelId) continue;
-        const alreadyExists = customModels.some(
-          (entry) => entry.providerAlias === providerStorageAlias && entry.id === modelId && (entry.kind || entry.type || "llm") === "llm"
-        ) || Object.values(modelAliases).includes(`${providerStorageAlias}/${modelId}`);
-        if (alreadyExists) {
-          continue;
-        }
-        await handleAddCustomModel(modelId, "llm", providerStorageAlias);
-        importedCount += 1;
-      }
-      if (importedCount === 0) {
-        alert(translate("All models already exist, no new models added"));
-      } else {
-        alert(translate("Successfully added") + ` ${importedCount} ` + translate("models"));
-      }
-    } catch (error) {
-      console.log("Error importing Cline models:", error);
-      alert(translate("Error fetching models") + ": " + error.message);
-    } finally {
-      setImportingClineModels(false);
     }
   };
 
@@ -835,11 +594,6 @@ export default function ProviderDetailPage() {
   const handleOAuthSuccess = () => {
     fetchConnections();
     setShowOAuthModal(false);
-  };
-
-  const handleIFlowCookieSuccess = () => {
-    fetchConnections();
-    setShowIFlowCookieModal(false);
   };
 
   const handleSaveApiKey = async (formData) => {
@@ -1048,14 +802,6 @@ export default function ProviderDetailPage() {
                 onMoveUp={() => handleSwapPriority(index, index - 1)}
                 onMoveDown={() => handleSwapPriority(index, index + 1)}
                 onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
-                autoPing={AUTO_PING_SETTINGS_KEYS[providerId] && conn.authType === "oauth" ? {
-                  isActive: autoPing.connections[conn.id] === true || autoPing.schedules?.[conn.id]?.enabled === true,
-                  reactiveOn: autoPing.connections[conn.id] === true,
-                  provider: providerId,
-                  scheduleOn: autoPing.schedules?.[conn.id]?.enabled === true,
-                  scheduleSummary: getScheduleSlotLabels(autoPing.schedules?.[conn.id]).join(" / "),
-                  onConfigure: () => setScheduleConnection(conn),
-                } : null}
                 onUpdateProxy={async (proxyPoolId) => {
                   try {
                     const res = await fetch(`/api/providers/${conn.id}`, {
@@ -1181,7 +927,6 @@ export default function ProviderDetailPage() {
     // Exclude non-llm models (embedding, tts, etc.) — they have dedicated pages under media-providers
     const allModels = [
       ...models,
-      ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
     ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; });
     const disabledSet = new Set(disabledModelIds);
     const displayModels = allModels.filter((m) => !disabledSet.has(m.id));
@@ -1258,34 +1003,6 @@ export default function ProviderDetailPage() {
           <span className="material-symbols-outlined text-sm">add</span>
           Add Model
         </button>
-
-        {/* Import Qoder models button — only show for qoder/qoder-cn provider */}
-        {(providerId === "qoder" || providerId === "qoder-cn") && connections.some((conn) => conn.isActive !== false) && (
-          <button
-            onClick={handleImportQoderModels}
-            disabled={importingQoderModels}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-blue-500/40 px-3 py-2 text-xs text-blue-600 dark:text-blue-400 transition-colors hover:border-blue-500 hover:bg-blue-500/5 sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span className="material-symbols-outlined text-sm" style={importingQoderModels ? { animation: "spin 1s linear infinite" } : undefined}>
-              {importingQoderModels ? "progress_activity" : "download"}
-            </span>
-            {importingQoderModels ? translate("Fetching...") : translate("Fetch Qoder Models")}
-          </button>
-        )}
-
-        {/* Import Cline /models catalog button — only show for cline and clinepass providers */}
-        {(providerId === "cline" || providerId === "clinepass") && connections.some((conn) => conn.isActive !== false) && (
-          <button
-            onClick={handleImportClineModels}
-            disabled={importingClineModels}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-blue-500/40 px-3 py-2 text-xs text-blue-600 dark:text-blue-400 transition-colors hover:border-blue-500 hover:bg-blue-500/5 sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span className="material-symbols-outlined text-sm" style={importingClineModels ? { animation: "spin 1s linear infinite" } : undefined}>
-              {importingClineModels ? "progress_activity" : "download"}
-            </span>
-            {importingClineModels ? translate("Fetching...") : translate("Import from /models")}
-          </button>
-        )}
 
         {/* Suggested models from provider API — show only models not yet added */}
         {suggestedModels.length > 0 && (() => {
@@ -1621,27 +1338,12 @@ export default function ProviderDetailPage() {
                   </>
                 ) : (
                   <>
-                    {!isCompatible && providerId === "iflow" && (
-                      <Button size="sm" icon="cookie" variant="secondary" onClick={() => setShowIFlowCookieModal(true)}>
-                        Cookie
-                      </Button>
-                    )}
-                    {providerId === "codex" && (
-                      <Button size="sm" icon="playlist_add" variant="secondary" onClick={() => setShowBulkImportCodex(true)}>
-                        {translate("Bulk Add")}
-                      </Button>
-                    )}
-                    {providerId === "grok-cli" && (
-                      <Button size="sm" icon="playlist_add" variant="secondary" onClick={() => setShowBulkImportGrokCli(true)}>
-                        {translate("Bulk Add")}
-                      </Button>
-                    )}
                     <Button
                       size="sm"
                       icon="add"
                       onClick={triggerAddConnection}
                     >
-                      {isCompatible ? "Add API Key" : (providerId === "iflow" ? "OAuth" : "Add Connection")}
+                      {isCompatible ? "Add API Key" : "Add Connection"}
                     </Button>
                   </>
                 )}
@@ -1681,42 +1383,6 @@ export default function ProviderDetailPage() {
               {connectionsList}
               {!isCompatible && (
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:flex">
-                  {providerId === "iflow" && (
-                    <Button
-                      size="sm"
-                      icon="cookie"
-                      variant="secondary"
-                      onClick={() => setShowIFlowCookieModal(true)}
-                      title="Add connection using browser cookie"
-                      className="w-full sm:w-auto"
-                    >
-                      Cookie
-                    </Button>
-                  )}
-                  {providerId === "codex" && (
-                    <Button
-                      size="sm"
-                      icon="playlist_add"
-                      variant="secondary"
-                      onClick={() => setShowBulkImportCodex(true)}
-                      title={translate("Bulk import codex accounts from JSON")}
-                      className="w-full sm:w-auto"
-                    >
-                      {translate("Bulk Add")}
-                    </Button>
-                  )}
-                  {providerId === "grok-cli" && (
-                    <Button
-                      size="sm"
-                      icon="playlist_add"
-                      variant="secondary"
-                      onClick={() => setShowBulkImportGrokCli(true)}
-                      title={translate("Bulk import Grok CLI accounts from JSON")}
-                      className="w-full sm:w-auto"
-                    >
-                      {translate("Bulk Add")}
-                    </Button>
-                  )}
                   {hasDualAuthModes ? (
                     <>
                       <Button
@@ -1780,8 +1446,7 @@ export default function ProviderDetailPage() {
           {!isCompatible && (() => {
             const allIds = [
               ...models,
-              ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
-            ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; }).map((m) => m.id);
+                    ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; }).map((m) => m.id);
             const activeIds = allIds.filter((id) => !disabledModelIds.includes(id));
             return (
               <div className="flex gap-2">
@@ -1827,9 +1492,6 @@ export default function ProviderDetailPage() {
               );
             })()}
           </div>
-        )}
-        {providerId === "zed" && !!liveModelsError && (
-          <p className="text-xs text-red-500 mb-3 break-words">{liveModelsError}</p>
         )}
         {renderModelsSection()}
       </Card>
@@ -1885,45 +1547,6 @@ export default function ProviderDetailPage() {
           onClose={() => setShowAddCustomModel(false)}
         />
       )}
-
-      {providerId === "codex" && (
-        <BulkImportCodexModal
-          isOpen={showBulkImportCodex}
-          onClose={() => setShowBulkImportCodex(false)}
-          onSuccess={fetchConnections}
-        />
-      )}
-
-      {providerId === "grok-cli" && (
-        <BulkImportGrokCliModal
-          isOpen={showBulkImportGrokCli}
-          onClose={() => setShowBulkImportGrokCli(false)}
-          onSuccess={fetchConnections}
-        />
-      )}
-
-      {scheduleConnection && (
-        <AutoPingScheduleModal
-          isOpen={!!scheduleConnection}
-          onClose={() => setScheduleConnection(null)}
-          connection={scheduleConnection}
-          reactive={autoPing.connections[scheduleConnection.id] === true}
-          schedule={autoPing.schedules?.[scheduleConnection.id] || null}
-          onSave={(result) => handleSaveAutoPing(scheduleConnection.id, result)}
-        />
-      )}
-
-      {/* AG Risk Confirmation Modal */}
-      <ConfirmModal
-        isOpen={showAgRiskModal}
-        onClose={() => setShowAgRiskModal(false)}
-        onConfirm={handleAgRiskConfirm}
-        title="Risk Notice"
-        message={providerInfo?.deprecationNotice}
-        confirmText="I Understand, Continue"
-        cancelText="Cancel"
-        variant="danger"
-      />
 
       {/* Confirm Modal */}
       <ConfirmModal

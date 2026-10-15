@@ -6,13 +6,11 @@ import Link from "next/link";
 import PropTypes from "prop-types";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import HeaderMenu from "@/shared/components/HeaderMenu";
-import HeaderLanguage from "@/shared/components/HeaderLanguage";
 import ThemeToggle from "@/shared/components/ThemeToggle";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { getProviderIconSrc } from "@/shared/utils/providerIcon";
-import { translate } from "@/i18n/runtime";
 
 const getPageInfo = (pathname) => {
   if (!pathname) return { title: "", description: "", breadcrumbs: [] };
@@ -164,7 +162,7 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
                       />
                     )}
                     <h1 className="text-base lg:text-2xl font-semibold text-text-main tracking-tight truncate">
-                      {translate(crumb.label)}
+                      {crumb.label}
                     </h1>
                   </div>
                 )}
@@ -180,12 +178,12 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
                 </span>
               )}
               <h1 className="text-base lg:text-2xl font-semibold tracking-tight truncate">
-                {translate(title)}
+                {title}
               </h1>
             </div>
             {description && (
               <p className="hidden lg:block text-sm text-text-muted truncate">
-                {translate(description)}
+                {description}
               </p>
             )}
           </div>
@@ -196,7 +194,6 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
       <div className="flex items-center gap-1 shrink-0">
         <HeaderSearch />
         <ThemeToggle />
-        <HeaderLanguage />
         <HeaderMenu onLogout={handleLogout} />
       </div>
     </header>

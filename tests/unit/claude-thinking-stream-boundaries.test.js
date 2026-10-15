@@ -15,7 +15,6 @@ import { describe, it, expect } from "vitest";
 import { claudeToOpenAIResponse } from "../../open-sse/translator/response/claude-to-openai.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { createSSETransformStreamWithLogger } from "../../open-sse/utils/stream.js";
-import { createResponsesApiTransformStream } from "../../open-sse/transformer/responsesTransformer.js";
 
 const THINKING = "391 factors as 17 times 23, so it's not prime.";
 const ANSWER = "No — 391 = 17 × 23.";
@@ -85,10 +84,6 @@ async function viaResponsesTranslator(chunks, upstream, provider, model) {
   return parseEvents(await drain(out));
 }
 
-async function viaResponsesTransformer(chunks) {
-  return parseEvents(await drain(sseStream(chunks).pipeThrough(createResponsesApiTransformStream(null))));
-}
-
 function parseEvents(text) {
   return text
     .split("\n")
@@ -154,22 +149,3 @@ describe("Responses translator: reasoning closes before the answer", () => {
   });
 });
 
-describe("responsesTransformer (/v1/responses handler): reasoning closes before the answer", () => {
-  it("reasoning item is done before the message item opens", async () => {
-    const events = await viaResponsesTransformer([
-      { id: "c3", choices: [{ index: 0, delta: { role: "assistant", reasoning_content: THINKING } }] },
-      { id: "c3", choices: [{ index: 0, delta: { content: ANSWER } }] },
-      { id: "c3", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
-    ]);
-    expectReasoningClosedBefore(events, "message");
-  });
-
-  it("reasoning item is done before a tool call opens", async () => {
-    const events = await viaResponsesTransformer([
-      { id: "c4", choices: [{ index: 0, delta: { role: "assistant", reasoning_content: THINKING } }] },
-      { id: "c4", choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_2", type: "function", function: { name: "lookup", arguments: "{}" } }] } }] },
-      { id: "c4", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
-    ]);
-    expectReasoningClosedBefore(events, "function_call");
-  });
-});

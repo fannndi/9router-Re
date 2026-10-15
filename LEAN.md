@@ -1,8 +1,8 @@
 # LEAN.md — what this fork keeps, and how to re-strip it
 
 This is a **slim fork** of [decolua/9router](https://github.com/decolua/9router) for one
-job: serving the **OpenCode Free** models through a **two-IP failover pool** so free-tier
-rate limits survive longer, with **combos** (round-robin across models) on top.
+job: serving **OpenCode Free** models through a **two-IP failover pool** so free-tier rate
+limits survive longer, with **combos** on top.
 
 Everything else was removed on purpose. The strip is **scripted** so upstream changes stay
 cheap to absorb:
@@ -12,25 +12,27 @@ node scripts/lean.mjs list              # phases + what each one removes
 node scripts/lean.mjs apply <phase>     # idempotent; safe to re-run
 node scripts/lean.mjs apply all
 node scripts/lean.mjs verify all        # fails if a phase is only half-applied
+node scripts/lean.mjs audit             # fails when a rule can never apply (check ⊂ find)
 ```
 
-Phases: `updater`, `cli-tools`, `media`, `usage-quota`, `token-saver`, `sso`,
-`mitm-tunnel`, `providers`, `cosmetics`.
+Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-saver`,
+`sso`, `mitm-tunnel`, `providers`, `cosmetics`, `sweep`.
 
 ## What the fork keeps
 
 | Area | Where |
 |---|---|
 | OpenAI-compatible API (`/v1/chat/completions`, `/v1/models`, `/v1/messages`, `/v1/responses`, `/v1beta`) | `src/app/api/v1/*` |
-| OpenCode Free provider (no-auth, fingerprint headers, reasoning echo) | `open-sse/providers/registry/opencode.js`, `open-sse/executors/opencode.js` |
+| OpenCode Free provider (no-auth, fingerprint headers, reasoning echo, per-model `targetFormat`) | `open-sse/providers/registry/opencode.js`, `open-sse/executors/opencode.js` |
 | **Proxy-pool failover on 429/5xx** (direct → mobile pool, per-model cooldowns) | `src/lib/network/connectionProxy.js`, `src/sse/services/auth.js`, `src/sse/handlers/chat.js` |
 | Proxy Pools dashboard + API | `/dashboard/proxy-pools`, `/api/proxy-pools/*` |
 | Combos (round-robin / fallback / fusion) + **vision adapter only** | `open-sse/services/combo.js`, `open-sse/services/capacityAdapter.js` |
 | API keys, provider connections, dashboard password login | `/dashboard/endpoint`, `/api/keys`, `/api/providers` |
 | Console Log (live server output for debugging) | `/dashboard/console-log` |
+| Client-format translation that can actually occur: `openai`, `claude`, `gemini`, `openai-responses`, Ollama-compat (`/v1/api/chat`) | `open-sse/translator/` |
 
-Also kept but inert until used: provider-nodes (custom OpenAI-compatible endpoints),
-model aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog sync.
+Also kept but inert until used: provider-nodes (custom OpenAI-compatible endpoints), model
+aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog sync.
 
 ## What was removed (and why)
 
@@ -45,18 +47,41 @@ model aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog
 | `mitm-tunnel` | MITM proxy, Cloudflare tunnel, Tailscale, watchdog/network monitor | reached over LAN + phone tether |
 | `providers` | 137 provider registries, ~28 executors, all OAuth flows/services, background token refresh | keep only OpenCode Free |
 | `cosmetics` | docs sites, deploy manifests, npm `cli/`, Skills, Translator, pricing page, promos, sql.js fallback | dead weight |
+| `sweep` | see below | maximal pass: cruft + everything the earlier phases left behind |
 
-Notable side effects, all intentional:
+### The `sweep` phase (maximal pass)
+
+| Bucket | Removed |
+|---|---|
+| Repo cruft | `CLAUDE.md`, upstream `CHANGELOG.md`, `i18n/` (10 README translations), `.github/`, `.npmignore`, Next template SVGs, `sw.js`, stale dev scripts (`injectDisplayToRegistry`, `migrate-registry`, `test-combo-autoswitch`, `translate-readme`) |
+| Assets | 157 of 161 provider icons (kept `opencode.png`, `oai-r.png`, `oai-cc.png`, `anthropic-m.png`), the whole `public/i18n/` literal set |
+| Dead modules (0 importers) | `src/store/{providerStore,userStore,index}.js`, `shared/components/{Pagination,Drawer}.js`, `shared/constants/{ttsProviders,coworkPlugins,mitmToolHosts,colors,index}.js`, `lib/updater`, `lib/oauth`, `lib/qoder`, open-sse `config/{codexInstructions,awsConstants,googleTtsLanguages,models,constants,kiroConstants,grokCli}.js`, `utils/{awsEventStream,awsSigv4,codexToolSchema,cursorProtobuf,cursorChecksum,sse,kiroSessionReplay}` + `claudeToolTypeSelfCheck`, `handlers/responsesHandler.js`, `transformer/responsesTransformer.js`, `services/{compact,thoughtSignatureStore,qoderModels,kiroModels,cursorModels,kimchiModels,copilotModels,clinepassModels,nous,grokCliModels}.js`, `shared/{mimoAccount,awsCredentials,machineId,clineEnvelope}`, `shared/qoder/*` |
+| Vendor dead ends | serverless relay deploys (`/api/proxy-pools/{vercel,cloudflare,deno,netlify}-deploy` + relay UI + `proxyFetch`/`connectionProxy` branches), live model resolvers for pruned providers (kiro/cursor/cline/copilot/grok-cli/qoder/kimchi/zed/nous), `autoPing` schedule UI + `quotaPingSchedule`, BulkImport Codex/Grok-CLI modals, kilocode/ag-risk/xiaomi-miflow/iflow UI branches |
+| Translator prune | provider-only pairs: kiro, cursor, commandcode, ollama-target, vertex, antigravity, gemini-target, claude-target — the OpenCode registry only emits `openai`, `openai-responses` (muse-spark) and `claude` (union-alpha), so the kept pairs are exactly `claude↔openai`, `gemini→openai`, `openai-responses↔openai` |
+| i18n layer | `src/i18n/*`, `public/i18n/*`, `/api/locale`, `HeaderLanguage`, `LanguageSwitcher`, `constants/locales.js`, profile-page language card, `translate()` call sites (English literals inline) — dashboard is English-only |
+| Dependencies | `chalk`, `enquirer`, `express`, `node-forge`, `ora`, `react-is`, `socks-proxy-agent`, optional `@aws-sdk/credential-providers` → 15 deps + `better-sqlite3` optional |
+| Tests | every suite that covered the removed surface (~28 files) + stale `tests/__baseline__/` snapshots |
+
+**Overlays.** Ten files are deliberate fork rewrites rather than edits, so they live in
+full under `scripts/lean/overlays/` and the phase copies them over verbatim:
+`providers/[id]/page.js`, `AddApiKeyModal.js`, `ConnectionRow.js`, `providers/[id]/models/route.js`,
+`providers/validate/route.js`, `providers/[id]/test/testUtils.js`, `models/test/ping.js`,
+`proxy-pools/page.js`, `v1beta/models/[...path]/route.js`, `shared/utils/bulkAdd.js`.
+Everything else is patched with find/replace rules so upstream fixes keep flowing in.
+
+## Notable side effects (all intentional)
 
 - `src/lib/usageDb.js` and `open-sse/handlers/chatCore/requestDetail.js` are **stubs /
   log-only**: the chat path still calls them, nothing is persisted. The `📊 DONE … IN/OUT`
   line still prints.
-- `src/shared/services/initializeApp.js` is a ~30-line service (deferred connection
+- `src/shared/services/initializeApp.js` is a ~30-line boot service (deferred connection
   housekeeping only).
 - `custom-server.js` no longer starts a token-refresh scheduler; `src/proxy.js` is just the
   dashboard auth guard.
 - Provider pickers, `/v1/models` and the dashboard derive from the pruned
   `open-sse/providers/registry/index.js` (single entry: `opencode`).
+- The `v1beta` (Gemini) route converts clients to the chat path; the native Gemini-provider
+  passthrough went out with the media strip.
 
 ## Rebase recipe (when upstream changes, e.g. a new Zen fingerprint)
 
@@ -64,15 +89,17 @@ Notable side effects, all intentional:
 cd ~/Gateway/9router
 git fetch upstream
 git rebase upstream/master          # your patch commits live on top
+node scripts/lean.mjs audit         # rule sanity (check ⊂ find)
 node scripts/lean.mjs verify all    # any conflict left a phase half-applied?
 node scripts/lean.mjs apply all     # re-strip idempotently
 npm install && npm run build
-npx vitest run unit/proxy-pool-failover.test.js
+(cd tests && npx vitest run)
 systemctl --user restart 9router
 ```
 
 If a phase fails with *"patch site not found"*, upstream moved that file: open
-`scripts/lean.mjs`, update that one rule (find/replace strings are plain text), re-run.
+`scripts/lean.mjs`, update that one rule (find/replace strings are plain text) — or move the
+file to `scripts/lean/overlays/` if the fork owns it outright. Re-run `verify`/`audit` after.
 
 ## Adding a provider back
 
@@ -84,9 +111,22 @@ If a phase fails with *"patch site not found"*, upstream moved that file: open
 
 ## Verification checklist
 
+- `node scripts/lean.mjs audit && node scripts/lean.mjs verify all`
 - `npm run build` → compiles, static pages generated.
-- `npx vitest run unit/proxy-pool-failover.test.js` → 16/16.
-- `curl -s localhost:20128/v1/models` → only OpenCode Free models.
-- Chat smoke test through a combo:
-  `curl -s -X POST localhost:20128/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{"model":"free-autopilot","messages":[{"role":"user","content":"halo"}],"stream":false}'`
+- `(cd tests && npx vitest run)` → all green (~760 tests; `real/` suites skip without `RUN_REAL=1`).
+- `curl -s localhost:20128/v1/models` → the combo + `oc/*` models only.
+- Chat smoke through the combo:
+  `curl -s -X POST localhost:20128/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{"model":"free-autopilot","messages":[{"role":"user","content":"hi"}],"stream":false}'`
 - 429 failover: `~/Gateway/mobile-pool/e2e-local.sh` (mock 429 → pool retry).
+- Dashboard: log in, walk the six pages, removed routes (`/dashboard/skills`, `/api/locale`, …) return 404.
+
+## Inventory (this tree)
+
+| | Before fork | Now |
+|---|---|---|
+| JS files (`src` + `open-sse`) | 976 | 286 |
+| `src/` size | 5.8 MB | 1.7 MB |
+| `open-sse/` size | 3.4 MB | 1.1 MB |
+| Dependencies | 34 | 15 (+1 optional) |
+| `node_modules` | 731 MB | ~530 MB |
+| Test files | 143 | 115 |

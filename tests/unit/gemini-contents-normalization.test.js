@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { normalizeGeminiContents, sanitizeFunctionResponsePayload } from "../../open-sse/translator/formats/gemini.js";
-import { openaiToGeminiRequest } from "../../open-sse/translator/request/openai-to-gemini.js";
 
 describe("normalizeGeminiContents terminal turn guards", () => {
   it("appends user Continue turn when ending with model text turn", () => {
@@ -173,24 +172,6 @@ describe("functionResponse `$ref` sanitization", () => {
     expect(contents[2].parts[0].functionResponse.response.result.$ref).toBe("#/$defs/Config");
   });
 
-  it("openai -> gemini translation of a JSON-schema tool result carries no `$ref` key", () => {
-    const body = {
-      messages: [
-        { role: "user", content: "fetch it" },
-        {
-          role: "assistant",
-          content: null,
-          tool_calls: [{ id: "call_1", type: "function", function: { name: "webfetch", arguments: "{}" } }]
-        },
-        { role: "tool", tool_call_id: "call_1", content: JSON.stringify(schemaResult) },
-        { role: "user", content: "thanks" }
-      ]
-    };
-    const out = openaiToGeminiRequest("gemini-3-flash", body, true);
-    const frs = out.contents.flatMap(c => c.parts).filter(p => p.functionResponse);
-    expect(frs).toHaveLength(1);
-    expect(JSON.stringify(frs[0].functionResponse.response)).not.toContain('"$ref"');
-    expect(frs[0].functionResponse.response.result._ref).toBe("#/$defs/Config");
-  });
+
 });
 

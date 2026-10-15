@@ -77,7 +77,7 @@ const REFRESH_GRANTS = Object.fromEntries(
 
 export class DefaultExecutor extends BaseExecutor {
   constructor(provider) {
-    super(provider, PROVIDERS[provider] || PROVIDERS.openai);
+    super(provider, PROVIDERS[provider]);
   }
 
   transformRequest(model, body, stream, credentials) {

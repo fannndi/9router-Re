@@ -115,19 +115,20 @@ function getProviderConfig(provider, credentials = null) {
   if (isOpenAICompatible(provider)) {
     const apiType = resolveOpenAICompatibleApiType(provider, credentials);
     return {
-      ...PROVIDERS.openai,
+      // Compatible endpoints carry their own headers + base URL; the pruned
+      // registry has no `openai` defaults to spread anymore.
       format: apiType === "responses" ? "openai-responses" : "openai",
       baseUrl: OPENAI_COMPATIBLE_DEFAULTS.baseUrl,
     };
   }
   if (isAnthropicCompatible(provider)) {
     return {
-      ...PROVIDERS.anthropic, // Use Anthropic defaults (header: x-api-key)
+      // Anthropic-compatible headers are set by the executor (x-api-key).
       format: "claude",
       baseUrl: ANTHROPIC_COMPATIBLE_DEFAULTS.baseUrl,
     };
   }
-  return PROVIDERS[provider] || PROVIDERS.openai;
+  return PROVIDERS[provider] || {};
 }
 
 // Get target format for provider

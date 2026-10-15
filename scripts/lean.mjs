@@ -54,9 +54,40 @@ function exists(relPath) {
 function applyPatch(rule, { dry = false } = {}) {
   const abs = path.join(ROOT, rule.file);
   if (!fs.existsSync(abs)) {
+    if (rule.overlay) return "skip";
     throw new Error(`patch target missing: ${rule.file}`);
   }
   let src = fs.readFileSync(abs, "utf8");
+
+  if (rule.createFrom) {
+    // Fork-owned file that must exist even after upstream/earlier phases deleted
+    // it (e.g. a route the providers phase pruned but the UI still calls).
+    const srcAbs = path.join(ROOT, rule.createFrom);
+    if (!fs.existsSync(srcAbs)) {
+      throw new Error(`createFrom source missing: ${rule.createFrom}`);
+    }
+    const content = fs.readFileSync(srcAbs, "utf8");
+    const absTarget = path.join(ROOT, rule.file);
+    if (fs.existsSync(absTarget) && fs.readFileSync(absTarget, "utf8") === content) return "skip";
+    if (!dry) {
+      fs.mkdirSync(path.dirname(absTarget), { recursive: true });
+      fs.writeFileSync(absTarget, content);
+    }
+    return "applied";
+  }
+
+  if (rule.overlay) {
+    // Fork-owned file: replace it wholesale with the lean copy under
+    // scripts/lean/overlays/. Skip when upstream deleted the target.
+    const overlayAbs = path.join(ROOT, rule.overlay);
+    if (!fs.existsSync(overlayAbs)) {
+      throw new Error(`overlay source missing: ${rule.overlay}`);
+    }
+    const content = fs.readFileSync(overlayAbs, "utf8");
+    if (src === content) return "skip";
+    if (!dry) fs.writeFileSync(abs, content);
+    return "applied";
+  }
 
   if (rule.writeFile !== undefined) {
     if (rule.check && src.includes(rule.check)) return "skip";
@@ -160,15 +191,30 @@ function applyPhase(phase, { dry = false, quiet = false } = {}) {
 }
 
 function removeDeps(phase, { dry = false, quiet = false } = {}) {
-  if (!phase.deps?.remove?.length) return { removed: 0 };
+  if (!phase.deps?.remove?.length && !phase.deps?.removeComments?.length) return { removed: 0 };
   const pkgPath = path.join(ROOT, "package.json");
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
   let removed = 0;
-  for (const dep of phase.deps.remove) {
+  for (const dep of phase.deps.remove || []) {
     if (pkg.dependencies?.[dep]) {
       delete pkg.dependencies[dep];
       removed++;
       if (!quiet) console.log(c.dim(`  - dep ${dep}`));
+    }
+    if (pkg.optionalDependencies?.[dep]) {
+      delete pkg.optionalDependencies[dep];
+      removed++;
+      if (!quiet) console.log(c.dim(`  - optional dep ${dep}`));
+    }
+  }
+  if (pkg.optionalDependencies && Object.keys(pkg.optionalDependencies).length === 0) {
+    delete pkg.optionalDependencies;
+  }
+  for (const key of phase.deps.removeComments || []) {
+    if (pkg[key] !== undefined) {
+      delete pkg[key];
+      removed++;
+      if (!quiet) console.log(c.dim(`  - package.json key ${key}`));
     }
   }
   if (!dry && removed) fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
@@ -227,6 +273,7 @@ function cmdVerify(args) {
     const phase = PHASES[id];
     const leftoverPaths = (phase.delete || []).filter((rel) => exists(rel));
     const leftoverPatches = (phase.patch || []).filter((rule) => {
+      if (rule.overlay || rule.createFrom) return false;
       let src;
       try {
         src = read(rule.file);
@@ -240,7 +287,23 @@ function cmdVerify(args) {
     });
     const leftoverDeps = (phase.deps?.remove || []).filter((dep) => {
       const pkg = JSON.parse(read("package.json"));
-      return !!pkg.dependencies?.[dep];
+      return !!pkg.dependencies?.[dep] || !!pkg.optionalDependencies?.[dep];
+    });
+    const leftoverOverlays = (phase.patch || []).filter((rule) => {
+      if (rule.createFrom) {
+        try {
+          return !exists(rule.file) || read(rule.file) !== read(rule.createFrom);
+        } catch {
+          return true;
+        }
+      }
+      if (!rule.overlay) return false;
+      if (!exists(rule.file)) return false; // upstream / earlier phase deleted it → resolved
+      try {
+        return read(rule.file) !== read(rule.overlay);
+      } catch {
+        return false;
+      }
     });
     const leftoverPrunes = (phase.pruneDir || []).flatMap((spec) => {
       const dirAbs = path.join(ROOT, spec.dir);
@@ -251,13 +314,14 @@ function cmdVerify(args) {
         .filter((entry) => !keep.has(entry))
         .map((entry) => `${spec.dir}/${entry}`);
     });
-    if (leftoverPaths.length || leftoverPatches.length || leftoverDeps.length || leftoverPrunes.length) {
+    if (leftoverPaths.length || leftoverPatches.length || leftoverDeps.length || leftoverPrunes.length || leftoverOverlays.length) {
       problems++;
       console.log(c.red(`✗ ${id} not fully applied`));
       for (const p of leftoverPaths) console.log(c.red(`    path still present: ${p}`));
       for (const p of leftoverPatches) console.log(c.red(`    patch site still present: ${p.file}`));
       for (const d of leftoverDeps) console.log(c.red(`    dep still present: ${d}`));
       for (const p of leftoverPrunes) console.log(c.red(`    dir entry still present: ${p}`));
+      for (const p of leftoverOverlays) console.log(c.red(`    overlay not applied: ${p.file}`));
     } else {
       console.log(c.green(`✓ ${id} applied`));
     }
@@ -293,6 +357,8 @@ export const UPDATER_CONFIG = {
   waitForExitCheckMs: 500,
   appPort: 20128,
 };
+
+
 
 `,
         replace: "",
@@ -492,19 +558,6 @@ export const APP_PORT = Number(process.env.PORT || 20128);
 // Theme configuration
 export const THEME_CONFIG = {`,
         check: `export const APP_PORT`,
-      },
-      {
-        file: "src/app/api/models/test/ping.js",
-        find: `import { UPDATER_CONFIG } from "@/shared/constants/config";
-import { getConsistentMachineId } from "@/shared/utils/machineId";`,
-        replace: `import { APP_PORT } from "@/shared/constants/config";
-import { getConsistentMachineId } from "@/shared/utils/machineId";`,
-        check: `import { APP_PORT } from "@/shared/constants/config";`,
-      },
-      {
-        file: "src/app/api/models/test/ping.js",
-        find: "baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`",
-        replace: "baseUrl = `http://127.0.0.1:${APP_PORT}`",
       },
       {
         file: "src/app/api/providers/[id]/test-models/route.js",
@@ -2408,17 +2461,6 @@ export async function refreshXaiToken() {
         checkAbsent: true,
       },
       {
-        file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
-        find: `import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, ZedAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
-        replace: `import { Card, Button, Modal, CardSkeleton, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";`,
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
-        find: `      {/* Modals */}`,
-        cutTo: `      <AddApiKeyModal`,
-      },
-      {
         file: "src/shared/components/index.js",
         find: `export { default as OAuthModal } from "./OAuthModal";
 `,
@@ -2439,69 +2481,11 @@ export { default as GitLabAuthModal } from "./GitLabAuthModal";
         checkAbsent: true,
       },
       {
-        file: "src/app/api/providers/validate/route.js",
-        find: `import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/api/providers/[id]/test/testUtils.js",
-        find: `import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
         file: "open-sse/translator/index.js",
         find: `import { AntigravityExecutor } from "../executors/antigravity.js";
 `,
         replace: "",
         checkAbsent: true,
-      },
-      {
-        file: "src/app/api/providers/validate/route.js",
-        find: `      // AWS-signed providers (Bedrock) have no bearer key for the generic probes below, which
-      // would reject bedrock outright and send bedrock-xai to a literal "{region}" host.
-      if (AI_PROVIDERS[provider]?.credentialForm === "aws") {
-        return NextResponse.json(await probeBedrockCredentials({ apiKey, providerSpecificData }, fetch));
-      }
-
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/api/providers/[id]/test/testUtils.js",
-        find: `  // AWS-signed providers (Bedrock): without this every Test ends in the switch's default,
-  // "Provider test not supported", and marks a working connection as errored.
-  if (AI_PROVIDERS[connection.provider]?.credentialForm === "aws") {
-    try {
-      return await probeBedrockCredentials(
-        connection,
-        (url, options) => fetchWithConnectionProxy(url, options, effectiveProxy),
-      );
-    } catch (err) {
-      return { valid: false, error: err.message };
-    }
-  }
-
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/api/providers/[id]/models/route.js",
-        find: `import codexProvider from "open-sse/providers/registry/codex.js";
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/api/providers/[id]/models/route.js",
-        find: "const CODEX_MODELS_URL = `https://chatgpt.com/backend-api/codex/models?client_version=${codexProvider.transport.cliVersion}`;",
-        replace: "const CODEX_MODELS_URL = \"https://chatgpt.com/backend-api/codex/models\";",
-        check: `const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models";`,
       },
       {
         file: "custom-server.js",
@@ -2917,6 +2901,694 @@ export const GITHUB_CONFIG = {
 };
 
 // ─── cli ───────────────────────────────────────────────────────────────────
+
+// ─── sweep (maximal) ───────────────────────────────────────────────────────
+// Repo cruft (upstream docs/CI/npm bits), the modules the provider prune left
+// behind (vendor resolvers, kiro/cursor/ollama/antigravity translators), the
+// relay-deploy feature, the dashboard i18n layer, and every test that covered
+// the removed surface. Files whose fork version is a deliberate rewrite live in
+// scripts/lean/overlays/ and are copied over verbatim (see applyPatch).
+PHASES.sweep = {
+  title: "sweep: repo cruft, dead code, vendor dead ends, i18n",
+  delete: [
+    ".github/dependabot.yml",
+    ".github/issue-assets/combo-defaults/cursor-model-list.png",
+    ".github/issue-assets/combo-defaults/override-openai-base-url.png",
+    ".npmignore",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "i18n/README.es.md",
+    "i18n/README.fa_IR.md",
+    "i18n/README.fr.md",
+    "i18n/README.id-ID.md",
+    "i18n/README.ja-JP.md",
+    "i18n/README.pt-BR.md",
+    "i18n/README.ru.md",
+    "i18n/README.th.md",
+    "i18n/README.vi.md",
+    "i18n/README.zh-CN.md",
+    "open-sse/config/awsConstants.js",
+    "open-sse/config/codexInstructions.js",
+    "open-sse/config/constants.js",
+    "open-sse/config/googleTtsLanguages.js",
+    "open-sse/config/grokCli.js",
+    "open-sse/config/kiroConstants.js",
+    "open-sse/config/models.js",
+    "open-sse/handlers/responsesHandler.js",
+    "open-sse/providers/REGISTRY_TEMPLATE.js",
+    "open-sse/services/clinepassModels.js",
+    "open-sse/services/compact.js",
+    "open-sse/services/copilotModels.js",
+    "open-sse/services/cursorModels.js",
+    "open-sse/services/grokCliModels.js",
+    "open-sse/services/kimchiModels.js",
+    "open-sse/services/kiroModels.js",
+    "open-sse/services/nous.js",
+    "open-sse/services/qoderModels.js",
+    "open-sse/services/thoughtSignatureStore.js",
+    "open-sse/shared/awsCredentials.js",
+    "open-sse/shared/clineEnvelope.js",
+    "open-sse/shared/machineId.js",
+    "open-sse/shared/mimoAccount.js",
+    "open-sse/shared/qoder/attachments.js",
+    "open-sse/shared/qoder/constants.js",
+    "open-sse/shared/qoder/contextTier.js",
+    "open-sse/shared/qoder/cosy.js",
+    "open-sse/shared/qoder/encoding.js",
+    "open-sse/shared/qoder/sse.js",
+    "open-sse/shared/zedAuth.js",
+    "open-sse/transformer/responsesTransformer.js",
+    "open-sse/translator/concerns/kiroConversation.js",
+    "open-sse/translator/request/antigravity-to-openai.js",
+    "open-sse/translator/request/claude-to-kiro.js",
+    "open-sse/translator/request/openai-to-commandcode.js",
+    "open-sse/translator/request/openai-to-cursor.js",
+    "open-sse/translator/request/openai-to-gemini.js",
+    "open-sse/translator/request/openai-to-kiro.js",
+    "open-sse/translator/request/openai-to-ollama.js",
+    "open-sse/translator/request/openai-to-vertex.js",
+    "open-sse/translator/response/commandcode-to-openai.js",
+    "open-sse/translator/response/cursor-to-openai.js",
+    "open-sse/translator/response/gemini-to-openai.js",
+    "open-sse/translator/response/kiro-to-claude.js",
+    "open-sse/translator/response/kiro-to-openai.js",
+    "open-sse/translator/response/ollama-to-openai.js",
+    "open-sse/translator/response/openai-to-antigravity.js",
+    "open-sse/utils/awsEventStream.js",
+    "open-sse/utils/awsSigv4.js",
+    "open-sse/utils/claudeToolTypeSelfCheck.mjs",
+    "open-sse/utils/codexToolSchema.js",
+    "open-sse/utils/cursorChecksum.js",
+    "open-sse/utils/cursorProtobuf.js",
+    "open-sse/utils/kiroSessionReplay.js",
+    "open-sse/utils/sse.js",
+    "public/file.svg",
+    "public/globe.svg",
+    "public/i18n",
+    "public/next.svg",
+    "public/sw.js",
+    "public/vercel.svg",
+    "public/window.svg",
+    "scripts/injectDisplayToRegistry.mjs",
+    "scripts/migrate-registry.mjs",
+    "scripts/test-combo-autoswitch.mjs",
+    "scripts/translate-readme.js",
+    "src/app/(dashboard)/dashboard/providers/[id]/AutoPingScheduleModal.js",
+    "src/app/(dashboard)/dashboard/providers/[id]/BulkImportCodexModal.js",
+    "src/app/(dashboard)/dashboard/providers/[id]/BulkImportGrokCliModal.js",
+    "src/app/(dashboard)/dashboard/providers/components/ConnectionsCard.js",
+    "src/app/(dashboard)/dashboard/providers/components/ModelsCard.js",
+    "src/app/api/locale/route.js",
+    "src/app/api/proxy-pools/cloudflare-deploy/route.js",
+    "src/app/api/proxy-pools/deno-deploy/route.js",
+    "src/app/api/proxy-pools/netlify-deploy/route.js",
+    "src/app/api/proxy-pools/vercel-deploy/route.js",
+    "src/i18n/RuntimeI18nProvider.js",
+    "src/i18n/config.js",
+    "src/i18n/runtime.js",
+    "src/lib/grokBuildConfig.js",
+    "src/lib/network/netlifyRelay.js",
+    "src/lib/oauth/constants/oauth.js",
+    "src/lib/oauth/constants/xai.js",
+    "src/lib/oauth/providerHelpers.js",
+    "src/lib/qoder/constants.js",
+    "src/lib/qoder/cosy.js",
+    "src/lib/qoder/encoding.js",
+    "src/lib/updater/updater.js",
+    "src/shared/components/Drawer.js",
+    "src/shared/components/HeaderLanguage.js",
+    "src/shared/components/LanguageSwitcher.js",
+    "src/shared/components/Pagination.js",
+    "src/shared/constants/colors.js",
+    "src/shared/constants/coworkPlugins.js",
+    "src/shared/constants/index.js",
+    "src/shared/constants/locales.js",
+    "src/shared/constants/mitmToolHosts.js",
+    "src/shared/constants/ttsProviders.js",
+    "src/shared/hooks/index.js",
+    "src/shared/services/quotaPingSchedule.js",
+    "src/shared/utils/clineAuth.js",
+    "src/store/index.js",
+    "src/store/providerStore.js",
+    "src/store/userStore.js",
+    "tests/__baseline__/alias-baseline.json",
+    "tests/__baseline__/baseline-results.json",
+    "tests/__baseline__/current.json",
+    "tests/__baseline__/known-fails.txt",
+    "tests/__baseline__/oauth-urls-baseline.json",
+    "tests/__baseline__/providers-baseline.json",
+    "tests/__baseline__/snapshot-providers.mjs",
+    "tests/__baseline__/verify-alias.mjs",
+    "tests/__baseline__/verify-no-regression.mjs",
+    "tests/__baseline__/verify-oauth-urls.mjs",
+    "tests/__baseline__/verify-providers.mjs",
+    "tests/translator/bugs-kiro.test.js",
+    "tests/translator/kiro-tool-name-roundtrip.test.js",
+    "tests/translator/real/antigravity-models.real.test.js",
+    "tests/translator/real/deepseek-official-responses.real.test.js",
+    "tests/translator/real/nvidia-thinking.e2e.test.js",
+    "tests/translator/real/opencode-go-deepseek.real.test.js",
+    "tests/translator/real/opencode-go-thinking-passthrough.real.test.js",
+    "tests/translator/real/opencode-go-thinking-placeholder.real.test.js",
+    "tests/translator/real/opencode-go-tool-session.real.test.js",
+    "tests/unit/antigravity-thought-signature-family.test.js",
+    "tests/unit/aws-credentials.test.js",
+    "tests/unit/aws-sigv4.test.js",
+    "tests/unit/codebuddy-intl-test-config.test.js",
+    "tests/unit/gemini-duplicate-tool-call-ids.test.js",
+    "tests/unit/grok-build-config.test.js",
+    "tests/unit/grok-cli-models.test.js",
+    "tests/unit/grok-cli-oauth-probe.test.js",
+    "tests/unit/kiro-conversation-canonicalization.test.js",
+    "tests/unit/kiro-minimal-wire-payload.test.js",
+    "tests/unit/kiro-tool-result-placeholder.test.js",
+    "tests/unit/netlify-relay.test.js",
+    "tests/unit/nous-provider-routes.test.js",
+    "tests/unit/ollama-stream-tail.test.js",
+    "tests/unit/openai-to-ollama-malformed.test.js",
+    "tests/unit/qoder-context-tier.test.js",
+    "tests/unit/quota-ping-schedule.test.js",
+    "tests/unit/thinking-levels-kiro.test.js",
+    "tests/unit/zed-live-models.test.js",
+  ],
+  pruneDir: [
+    { dir: "public/providers", keep: ["opencode.png", "oai-r.png", "oai-cc.png", "anthropic-m.png"] },
+  ],
+  deps: {
+    remove: ["chalk", "enquirer", "express", "node-forge", "ora", "react-is", "socks-proxy-agent", "@aws-sdk/credential-providers"],
+    removeComments: ["comment_aws_sdk_credential_providers"],
+  },
+  patch: [
+    // ── core engine: drop the token-saver header + grok-cli effort probe
+    {
+      file: "open-sse/handlers/chatCore.js",
+      find: `import { HTTP_STATUS, TOKEN_SAVER_HEADER } from "../config/runtimeConfig.js";`,
+      replace: `import { HTTP_STATUS } from "../config/runtimeConfig.js";`,
+    },
+    {
+      file: "open-sse/handlers/chatCore.js",
+      find: `import { supportsGrokCliReasoningEffort } from "../config/grokCli.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/handlers/chatCore.js",
+      find: `    const showThinking = provider !== "grok-cli" || supportsGrokCliReasoningEffort(model);`,
+      replace: `    const showThinking = true;`,
+    },
+    // ── non-streaming handler: drop the ollama target branch + cline envelope
+    {
+      file: "open-sse/handlers/chatCore/nonStreamingHandler.js",
+      find: `import { ollamaBodyToOpenAI } from "../../translator/response/ollama-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/handlers/chatCore/nonStreamingHandler.js",
+      find: `import { unwrapClineEnvelope } from "../../shared/clineEnvelope.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/handlers/chatCore/nonStreamingHandler.js",
+      find: `  // Ollama\n  if (targetFormat === FORMATS.OLLAMA) {\n    return ollamaBodyToOpenAI(responseBody);\n  }\n\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/handlers/chatCore/nonStreamingHandler.js",
+      find: `  // Unwrap before any consumer reads choices/usage so non-stream clients get a\n  // bare OpenAI body and usage tracking sees data.usage. No-op unless the\n  // provider opts in via transport.quirks.clineEnvelope.\n  responseBody = unwrapClineEnvelope(responseBody, provider);\n\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── chat handler: drop the antigravity/gemini-cli project-id warm-up
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { getProjectIdForConnection } from "open-sse/services/projectId.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `\n    // Ensure real project ID is available for providers that need it (P0 fix: cold miss)\n    if ((provider === "antigravity" || provider === "gemini-cli") && !refreshedCredentials.projectId) {\n      const pid = await getProjectIdForConnection(credentials.connectionId, refreshedCredentials.accessToken, provider);\n      if (pid) {\n        refreshedCredentials.projectId = pid;\n        // Persist to DB in background so subsequent requests have it immediately\n        updateProviderCredentials(credentials.connectionId, { projectId: pid }).catch(() => { });\n      }\n    }\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── noauth proxy payload: relay field is gone
+    {
+      file: "src/sse/services/auth.js",
+      find: `            vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── proxyFetch: drop the relay forwarding branch
+    {
+      file: "open-sse/utils/proxyFetch.js",
+      find: `  // Vercel relay: forward request via relay headers`,
+      cutTo: `  const connectionProxyUrl = resolveConnectionProxyUrl(targetUrl, proxyOptions);`,
+    },
+    // ── connectionProxy: drop the relay pool branch
+    {
+      file: "src/lib/network/connectionProxy.js",
+      find: `        /**\n         * Vercel/Cloudflare/Deno/Netlify relay proxies use base URL rewriting`,
+      cutTo: `        /**\n         * Standard proxy pool`,
+    },
+    // ── proxy pool API: only plain http pools exist now
+    {
+      file: "src/app/api/proxy-pools/route.js",
+      find: `const VALID_PROXY_TYPES = ["http", "vercel", "cloudflare", "deno", "netlify"];`,
+      replace: `const VALID_PROXY_TYPES = ["http"];`,
+    },
+    {
+      file: "src/app/api/proxy-pools/[id]/route.js",
+      find: `const validTypes = ["http", "vercel", "cloudflare", "deno", "netlify"];`,
+      replace: `const validTypes = ["http"];`,
+    },
+    {
+      file: "src/app/api/proxy-pools/[id]/test/route.js",
+      find: `async function testVercelRelay`,
+      cutTo: `// POST /api/proxy-pools/[id]/test`,
+    },
+    {
+      file: "src/app/api/proxy-pools/[id]/test/route.js",
+      find: `    const result = proxyPool.type === "vercel" || proxyPool.type === "cloudflare" || proxyPool.type === "deno" || proxyPool.type === "netlify"\n      ? await testVercelRelay(proxyPool.proxyUrl)\n      : await testProxyUrl({ proxyUrl: proxyPool.proxyUrl });`,
+      replace: `    const result = await testProxyUrl({ proxyUrl: proxyPool.proxyUrl });`,
+    },
+    // ── runtimeConfig: searxng + media TTS + token-saver leftovers
+    {
+      file: "open-sse/config/runtimeConfig.js",
+      find: `export const SEARXNG_URL = envUrl("SEARXNG_URL", "http://localhost:8888/search");\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/config/runtimeConfig.js",
+      find: `export const GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS = envMs("GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS", 45 * 1000);\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/config/runtimeConfig.js",
+      find: `export const TOKEN_SAVER_HEADER = "x-9router-token-saver";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── thinkingLevels: kiro effort path is gone
+    {
+      file: "open-sse/providers/thinkingLevels.js",
+      find: `import { resolveKiroEffortPath } from "../config/kiroConstants.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/providers/thinkingLevels.js",
+      find: `  if (provider === "kiro" && resolveKiroEffortPath(model) === null) return null;\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── registry opencode: systemone endpoint went with the media strip
+    {
+      file: "open-sse/providers/registry/opencode.js",
+      find: `    { id: "jev-1.13-free", name: "Jev 1.13 Free", kind: "systemone" },\n  ],\n  serviceKinds: ["llm", "systemone"],\n  systemoneConfig: {\n    baseUrl: "https://opencode.ai/zen/v1/systemone",\n    headers: {\n      "x-opencode-client": "desktop",\n      "User-Agent": "opencode/1.18.31",\n    },\n  },\n  modelsFetcher:`,
+      replace: `  ],\n  modelsFetcher:`,
+    },
+    // ── providers constants: drop the systemone kind + whitelist entry
+    {
+      file: "src/shared/constants/providers.js",
+      find: `  "searchViaChat", "searchConfig", "fetchConfig", "credentialFallback", "systemoneConfig",`,
+      replace: `  "searchViaChat", "searchConfig", "fetchConfig", "credentialFallback",`,
+    },
+    {
+      file: "src/shared/constants/providers.js",
+      find: `  { id: "systemone",   label: "System One",     icon: "psychology",        endpoint: { method: "POST", path: "/v1/systemone" }, isNew: true },\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/providers/index.js",
+      find: `  "searchViaChat", "searchConfig", "fetchConfig", "systemoneConfig",`,
+      replace: `  "searchViaChat", "searchConfig", "fetchConfig",`,
+    },
+    // ── keyAccess comment
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: ` * (embeddings, stt, systemone, video, Gemini-native TTS). A missing model`,
+      replace: ` * (embeddings, stt, video, Gemini-native TTS). A missing model`,
+    },
+    // ── dashboard i18n layer
+    {
+      file: "src/app/layout.js",
+      find: `import { RuntimeI18nProvider } from "@/i18n/RuntimeI18nProvider";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/layout.js",
+      find: `        <ThemeProvider>\n          <RuntimeI18nProvider>\n            {children}\n          </RuntimeI18nProvider>\n        </ThemeProvider>`,
+      replace: `        <ThemeProvider>\n          {children}\n        </ThemeProvider>`,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `import HeaderLanguage from "@/shared/components/HeaderLanguage";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `import { translate } from "@/i18n/runtime";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `        <HeaderLanguage />\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `{translate(crumb.label)}`,
+      replace: `{crumb.label}`,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `{translate(title)}`,
+      replace: `{title}`,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `{translate(description)}`,
+      replace: `{description}`,
+    },
+    {
+      file: "src/shared/components/index.js",
+      find: `export { default as LanguageSwitcher } from "./LanguageSwitcher";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `import LanguageSwitcher from "@/shared/components/LanguageSwitcher";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";\nimport { LOCALE_FLAGS } from "@/shared/constants/locales";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `function getLocaleFromCookie() {\n  if (typeof document === "undefined") return "en";\n  const cookie = document.cookie\n    .split(";")\n    .find((c) => c.trim().startsWith(\`\${LOCALE_COOKIE}=\`));\n  const value = cookie ? decodeURIComponent(cookie.split("=")[1]) : "en";\n  return normalizeLocale(value);\n}\n\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `  const [locale, setLocale] = useState(() => getLocaleFromCookie());\n  const [langOpen, setLangOpen] = useState(false);\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `        {/* Language */}\n        <Card>\n          <div className="flex items-center gap-3 mb-4">\n            <div className="size-10 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">\n              <span className="material-symbols-outlined text-[20px]">language</span>\n            </div>\n            <h3 className="text-base sm:text-lg font-semibold">Language</h3>\n          </div>\n          <button\n            onClick={() => setLangOpen(true)}\n            className="flex items-center justify-between w-full p-3 rounded-lg bg-bg border border-border hover:border-primary/50 transition-colors"\n            data-i18n-skip="true"\n          >\n            <span className="text-sm text-text-muted">Display language</span>\n            <span className="text-2xl">{LOCALE_FLAGS[locale] || "🌐"}</span>\n          </button>\n        </Card>\n\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `      <LanguageSwitcher\n        hideTrigger\n        isOpen={langOpen}\n        onClose={(next) => {\n          setLangOpen(false);\n          setLocale(next);\n        }}\n      />\n\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── cloud settings (sync is gone)
+    {
+      file: "src/lib/db/repos/settingsRepo.js",
+      find: `export async function isCloudEnabled() {`,
+      cutTo: `export async function exportSettings() {`,
+    },
+    {
+      file: "src/lib/localDb.js",
+      find: `  getSettings, updateSettings, isCloudEnabled, getCloudUrl,`,
+      replace: `  getSettings, updateSettings,`,
+    },
+    {
+      file: "src/lib/db/index.js",
+      find: `  getSettings, updateSettings, isCloudEnabled, getCloudUrl, exportSettings,`,
+      replace: `  getSettings, updateSettings, exportSettings,`,
+    },
+    {
+      file: "src/models/index.js",
+      find: `  isCloudEnabled,\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── translator registry: drop the provider-only pairs
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/antigravity-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/antigravity-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/claude-to-kiro.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/claude-to-kiro.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/openai-to-kiro.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/openai-to-kiro.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/openai-to-commandcode.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/openai-to-commandcode.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/openai-to-cursor.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/openai-to-cursor.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/openai-to-gemini.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/openai-to-gemini.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/openai-to-ollama.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/openai-to-ollama.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/request/openai-to-vertex.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/request/openai-to-vertex.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/response/commandcode-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/response/commandcode-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/response/cursor-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/response/cursor-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/response/gemini-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/response/gemini-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/response/kiro-to-claude.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/response/kiro-to-claude.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/response/kiro-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/response/kiro-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/response/ollama-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/response/ollama-to-openai.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "open-sse/translator/index.js",
+      find: `import "/translator/response/openai-to-antigravity.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "tests/translator/registerAll.js",
+      find: `import "../../open-sse/translator/response/openai-to-antigravity.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    // ── generic executor: compatible endpoints have no registry entry
+    {
+      file: "open-sse/executors/base.js",
+      find: `  constructor(provider, config) {
+    this.provider = provider;
+    this.config = config;
+    this.noAuth = config?.noAuth || false;
+  }`,
+      replace: `  constructor(provider, config) {
+    this.provider = provider;
+    // Custom (compatible) endpoints have no registry entry — an empty config
+    // keeps the generic paths (buildUrl/buildHeaders) working.
+    this.config = config || {};
+    this.noAuth = this.config.noAuth || false;
+  }`,
+    },
+    {
+      file: "open-sse/executors/default.js",
+      find: `    super(provider, PROVIDERS[provider] || PROVIDERS.openai);`,
+      replace: `    super(provider, PROVIDERS[provider]);`,
+    },
+    // ── provider defaults: the pruned registry has no openai/anthropic entries
+    {
+      file: "open-sse/services/provider.js",
+      find: `      ...PROVIDERS.openai,
+      format: apiType === "responses" ? "openai-responses" : "openai",`,
+      replace: `      // Compatible endpoints carry their own headers + base URL; the pruned
+      // registry has no \`openai\` defaults to spread anymore.
+      format: apiType === "responses" ? "openai-responses" : "openai",`,
+    },
+    {
+      file: "open-sse/services/provider.js",
+      find: `      ...PROVIDERS.anthropic, // Use Anthropic defaults (header: x-api-key)
+      format: "claude",`,
+      replace: `      // Anthropic-compatible headers are set by the executor (x-api-key).
+      format: "claude",`,
+    },
+    {
+      file: "open-sse/services/provider.js",
+      find: `  return PROVIDERS[provider] || PROVIDERS.openai;`,
+      replace: `  return PROVIDERS[provider] || {};`,
+    },
+    // ── suggested-models proxy: fork copy (upstream vendors pruned)
+    {
+      file: "src/app/api/providers/suggested-models/route.js",
+      createFrom: "scripts/lean/overlays/src/app/api/providers/suggested-models/route.js",
+    },
+    {
+      file: "src/app/api/providers/suggested-models/filters.js",
+      createFrom: "scripts/lean/overlays/src/app/api/providers/suggested-models/filters.js",
+    },
+    // ── fork-owned rewrites (full-file overlays)
+    { file: "src/app/(dashboard)/dashboard/providers/[id]/page.js", overlay: "scripts/lean/overlays/src/app/(dashboard)/dashboard/providers/[id]/page.js" },
+    { file: "src/app/(dashboard)/dashboard/providers/[id]/AddApiKeyModal.js", overlay: "scripts/lean/overlays/src/app/(dashboard)/dashboard/providers/[id]/AddApiKeyModal.js" },
+    { file: "src/app/(dashboard)/dashboard/providers/[id]/ConnectionRow.js", overlay: "scripts/lean/overlays/src/app/(dashboard)/dashboard/providers/[id]/ConnectionRow.js" },
+    { file: "src/app/api/providers/[id]/models/route.js", overlay: "scripts/lean/overlays/src/app/api/providers/[id]/models/route.js" },
+    { file: "src/app/api/providers/validate/route.js", overlay: "scripts/lean/overlays/src/app/api/providers/validate/route.js" },
+    { file: "src/app/api/providers/[id]/test/testUtils.js", overlay: "scripts/lean/overlays/src/app/api/providers/[id]/test/testUtils.js" },
+    { file: "src/app/api/models/test/ping.js", overlay: "scripts/lean/overlays/src/app/api/models/test/ping.js" },
+    { file: "src/app/(dashboard)/dashboard/proxy-pools/page.js", overlay: "scripts/lean/overlays/src/app/(dashboard)/dashboard/proxy-pools/page.js" },
+    { file: "src/app/api/v1beta/models/[...path]/route.js", overlay: "scripts/lean/overlays/src/app/api/v1beta/models/[...path]/route.js" },
+    { file: "src/shared/utils/bulkAdd.js", overlay: "scripts/lean/overlays/src/shared/utils/bulkAdd.js" },
+  ],
+};
 
 function cmdAudit() {
   // Guards against the one bug class that silently no-ops a rule: a `check`

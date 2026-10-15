@@ -4,10 +4,10 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
-import { Badge, Toggle, Tooltip } from "@/shared/components";
+import { Badge, Toggle } from "@/shared/components";
 import CooldownTimer from "./CooldownTimer";
 
-export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, oneByOneStatus = null, autoPing = null }) {
+export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete }) {
   const [showProxyDropdown, setShowProxyDropdown] = useState(false);
   const [updatingProxy, setUpdatingProxy] = useState(false);
   const proxyDropdownRef = useRef(null);
@@ -26,19 +26,6 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
       : hasLegacyProxy
         ? `Legacy: ${connection.providerSpecificData?.connectionProxyUrl}`
         : "";
-  const autoPingTooltip = (() => {
-    if (!autoPing) return "";
-    const activeModes = [];
-    if (autoPing.reactiveOn) activeModes.push("On reset");
-    if (autoPing.scheduleOn) activeModes.push(`Scheduled (${autoPing.scheduleSummary || "active"})`);
-    if (activeModes.length > 0) {
-      return `Auto-ping active: ${activeModes.join(" + ")}. Click to configure.`;
-    }
-    return autoPing.provider === "codex"
-      ? "Auto-starts the next 5h Codex window after reset or on schedule. Click to configure."
-      : "Auto-starts a new window on quota reset or fixed schedule. Click to configure.";
-  })();
-
   let maskedProxyUrl = "";
   if (boundProxyPool?.proxyUrl || connection.providerSpecificData?.connectionProxyUrl) {
     const rawProxyUrl = boundProxyPool?.proxyUrl || connection.providerSpecificData?.connectionProxyUrl;
@@ -298,17 +285,6 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
               )}
             </div>
           )}
-          {autoPing && (
-            <Tooltip text={autoPingTooltip}>
-              <button
-                onClick={autoPing.onConfigure}
-                className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPing.isActive ? "text-primary" : "text-text-muted hover:text-primary"}`}
-              >
-                <span className="material-symbols-outlined text-[18px]">bolt</span>
-                <span className="text-[10px] leading-tight">Auto-ping</span>
-              </button>
-            </Tooltip>
-          )}
           <button onClick={onEdit} className="flex flex-col items-center rounded px-2 py-1 text-text-muted hover:bg-black/5 hover:text-primary dark:hover:bg-white/5">
             <span className="material-symbols-outlined text-[18px]">edit</span>
             <span className="text-[10px] leading-tight">Edit</span>
@@ -361,13 +337,5 @@ ConnectionRow.propTypes = {
   oneByOneStatus: PropTypes.shape({
     state: PropTypes.string,
     error: PropTypes.string,
-  }),
-  autoPing: PropTypes.shape({
-    isActive: PropTypes.bool,
-    provider: PropTypes.string,
-    reactiveOn: PropTypes.bool,
-    scheduleOn: PropTypes.bool,
-    scheduleSummary: PropTypes.string,
-    onConfigure: PropTypes.func,
   }),
 };

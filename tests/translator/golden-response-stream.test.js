@@ -52,50 +52,6 @@ describe("GOLDEN response stream: Claude → OpenAI", () => {
   });
 });
 
-describe("GOLDEN response stream: Gemini → OpenAI", () => {
-  it("text + thought(no-sig) + functionCall + usage + finish", () => {
-    const events = [
-      { candidates: [{ content: { parts: [{ text: "thinking part", thought: true }] } }], responseId: "resp_1", modelVersion: "gemini-3-pro" },
-      { candidates: [{ content: { parts: [{ text: "Answer" }] } }] },
-      { candidates: [{ content: { parts: [{ functionCall: { name: "search", args: { q: "x" } } }] } }] },
-      { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 4, thoughtsTokenCount: 2, totalTokenCount: 14, cachedContentTokenCount: 1 } },
-    ];
-    expect(runStream(FORMATS.GEMINI, FORMATS.OPENAI, events)).toMatchSnapshot();
-  });
-
-  it("image output (inlineData → delta.images)", () => {
-    const events = [
-      { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: "BASE64DATA" } }] } }], responseId: "resp_2", modelVersion: "gemini-3-flash-image" },
-      { candidates: [{ finishReason: "STOP" }] },
-    ];
-    expect(runStream(FORMATS.GEMINI, FORMATS.OPENAI, events)).toMatchSnapshot();
-  });
-});
-
-describe("GOLDEN response stream: Kiro → OpenAI", () => {
-  it("text + reasoning + toolUse + usage + stop", () => {
-    const events = [
-      { assistantResponseEvent: { content: "Hello" }, _eventType: "assistantResponseEvent" },
-      { reasoningContentEvent: { text: "thinking" }, _eventType: "reasoningContentEvent" },
-      { toolUseEvent: { toolUseId: "tu_1", name: "get_weather", input: { city: "NYC" } }, _eventType: "toolUseEvent" },
-      { usageEvent: { inputTokens: 10, outputTokens: 5 }, _eventType: "usageEvent" },
-      { _eventType: "messageStopEvent" },
-    ];
-    expect(runStream(FORMATS.KIRO, FORMATS.OPENAI, events)).toMatchSnapshot();
-  });
-});
-
-describe("GOLDEN response stream: Ollama → OpenAI", () => {
-  it("content + thinking + tool_calls + done usage", () => {
-    const events = [
-      { model: "qwen3", message: { role: "assistant", content: "Hi", thinking: "reason" } },
-      { model: "qwen3", message: { role: "assistant", tool_calls: [{ function: { name: "search", arguments: { q: "x" } } }] } },
-      { model: "qwen3", done: true, done_reason: "stop", prompt_eval_count: 8, eval_count: 4 },
-    ];
-    expect(runStream(FORMATS.OLLAMA, FORMATS.OPENAI, events)).toMatchSnapshot();
-  });
-});
-
 describe("GOLDEN response stream: OpenAI-Responses (codex) → OpenAI", () => {
   it("text + reasoning + tool_call + completed usage", () => {
     const events = [

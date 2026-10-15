@@ -36,42 +36,6 @@ function runStream(targetFormat, sourceFormat, events) {
   return stripVolatile(all);
 }
 
-describe("GOLDEN response stream: CommandCode → OpenAI", () => {
-  it("text + reasoning + tool + finish-step usage", () => {
-    const events = [
-      { type: "text-delta", text: "Hello" },
-      { type: "reasoning-delta", text: "thinking" },
-      { type: "tool-input-start", id: "t1", toolName: "get_weather" },
-      { type: "tool-input-delta", id: "t1", delta: '{"city":"NYC"}' },
-      { type: "finish-step", finishReason: "tool-calls", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } },
-      { type: "finish" },
-    ];
-    expect(runStream(FORMATS.COMMANDCODE, FORMATS.OPENAI, events)).toMatchSnapshot();
-  });
-});
-
-describe("GOLDEN response stream: Kiro → OpenAI (finish after tool)", () => {
-  it("toolUse then stop — lock current finish_reason behavior", () => {
-    const events = [
-      { assistantResponseEvent: { content: "Hi" }, _eventType: "assistantResponseEvent" },
-      { toolUseEvent: { toolUseId: "tu_1", name: "search", input: { q: "x" } }, _eventType: "toolUseEvent" },
-      { usageEvent: { inputTokens: 7, outputTokens: 3 }, _eventType: "usageEvent" },
-      { _eventType: "messageStopEvent" },
-    ];
-    expect(runStream(FORMATS.KIRO, FORMATS.OPENAI, events)).toMatchSnapshot();
-  });
-});
-
-describe("GOLDEN response stream: Ollama → OpenAI (finish after tool)", () => {
-  it("tool_calls then done_reason=stop — lock current finish_reason", () => {
-    const events = [
-      { model: "qwen3", message: { role: "assistant", tool_calls: [{ function: { name: "search", arguments: { q: "x" } } }] } },
-      { model: "qwen3", done: true, done_reason: "stop", prompt_eval_count: 5, eval_count: 2 },
-    ];
-    expect(runStream(FORMATS.OLLAMA, FORMATS.OPENAI, events)).toMatchSnapshot();
-  });
-});
-
 describe("GOLDEN passthrough: same format = no translation", () => {
   it("response openai→openai returns chunk unchanged", () => {
     const chunk = { id: "chatcmpl-x", object: "chat.completion.chunk", created: 1, model: "gpt-4o", choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }] };

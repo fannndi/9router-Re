@@ -91,7 +91,6 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
             connectionProxyUrl: resolvedProxy.connectionProxyUrl,
             connectionNoProxy: resolvedProxy.connectionNoProxy,
             connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
-            vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
           },
           _poolFailover: {
             enabled: true,

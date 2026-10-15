@@ -1,7 +1,7 @@
 import REGISTRY from "../providers/registry/index.js";
 // PROVIDER_MODELS now built from providers/registry (transport + models co-located)
 import { PROVIDER_MODELS } from "../providers/index.js";
-import { modelQuotaFamily, modelStrip, modelTargetFormat, modelSupportedFormats, normalizeModelId } from "../providers/models/schema.js";
+import { modelQuotaFamily, modelStrip, modelTargetFormat, modelSupportedFormats } from "../providers/models/schema.js";
 import { CODEX_REVIEW_SUFFIX, isMuseSparkModel, opencodeFamilyFormats } from "../providers/models/helpers.js";
 import { FORMATS } from "../translator/formats.js";
 export { PROVIDER_MODELS };
@@ -20,37 +20,26 @@ export function getDefaultModel(aliasOrId) {
   return models?.[0]?.id || null;
 }
 
-// Providers whose registry uses dots in version numbers (e.g. "claude-sonnet-4.5").
-// For these, we tolerate clients sending dashes ("claude-sonnet-4-5") by normalizing
-// digit-hyphen-digit to digit-dot-digit before lookup. Other providers are left untouched.
-const DOT_VERSION_PROVIDERS = new Set(["kr", "kiro"]);
-
-// Find a registry entry by id. For Kiro models, tolerates dash/dot version separators
-// ("claude-sonnet-4-5" ~= "claude-sonnet-4.5"). Other providers use exact match only.
-function findModel(models, modelId, aliasOrId) {
+// Find a registry entry by id (exact match after the thinking-suffix strip).
+function findModel(models, modelId) {
   if (!models) return undefined;
   const baseModelId = typeof modelId === "string"
     ? modelId.replace(/\([^()]+\)\s*$/, "").trim()
     : modelId;
-  const found = models.find(m => m.id === modelId || m.id === baseModelId);
-  if (found) return found;
-  if (!DOT_VERSION_PROVIDERS.has(aliasOrId)) return undefined;
-  const normalized = normalizeModelId(baseModelId);
-  if (normalized === baseModelId) return undefined;
-  return models.find(m => m.id === normalized);
+  return models.find(m => m.id === modelId || m.id === baseModelId);
 }
 
 export function isValidModel(aliasOrId, modelId, passthroughProviders = new Set()) {
   if (passthroughProviders.has(aliasOrId)) return true;
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return false;
-  return !!findModel(models, modelId, aliasOrId);
+  return !!findModel(models, modelId);
 }
 
 export function findModelName(aliasOrId, modelId) {
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return modelId;
-  const found = findModel(models, modelId, aliasOrId);
+  const found = findModel(models, modelId);
   return found?.name || modelId;
 }
 
@@ -60,7 +49,7 @@ export function getModelTargetFormat(aliasOrId, modelId) {
   }
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return null;
-  const found = findModel(models, modelId, aliasOrId);
+  const found = findModel(models, modelId);
   if (found) return modelTargetFormat(found);
   // Family fallback keeps modelsFetcher/passthrough ids on their endpoint lane
   if (isOpenCodeAlias(aliasOrId)) return opencodeFamilyFormats(modelId)?.targetFormat || null;
@@ -74,7 +63,7 @@ export function getModelTargetFormat(aliasOrId, modelId) {
 export function getModelSupportedFormats(aliasOrId, modelId) {
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return null;
-  const found = findModel(models, modelId, aliasOrId);
+  const found = findModel(models, modelId);
   if (found) return modelSupportedFormats(found);
   if (isOpenCodeAlias(aliasOrId)) return opencodeFamilyFormats(modelId)?.supportedFormats || [FORMATS.OPENAI];
   return null;
@@ -83,7 +72,7 @@ export function getModelSupportedFormats(aliasOrId, modelId) {
 export function getModelType(aliasOrId, modelId) {
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return null;
-  const found = findModel(models, modelId, aliasOrId);
+  const found = findModel(models, modelId);
   return found?.kind || found?.type || null;
 }
 
@@ -115,7 +104,7 @@ export function getModelUpstreamId(aliasOrId, modelId) {
 
 export function getModelQuotaFamily(aliasOrId, modelId) {
   const models = PROVIDER_MODELS[aliasOrId];
-  return modelQuotaFamily(findModel(models, modelId, aliasOrId));
+  return modelQuotaFamily(findModel(models, modelId));
 }
 
 // OAuth short aliases — derived from registry `alias` (single source). everything else: alias = id.

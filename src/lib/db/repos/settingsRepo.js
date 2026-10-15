@@ -95,21 +95,6 @@ export async function updateSettings(updates) {
   return mergeWithDefaults(next);
 }
 
-export async function isCloudEnabled() {
-  const settings = await getSettings();
-  return settings.cloudEnabled === true;
-}
-
-export async function getCloudUrl() {
-  const settings = await getSettings();
-  return (
-    settings.cloudUrl ||
-    process.env.CLOUD_URL ||
-    process.env.NEXT_PUBLIC_CLOUD_URL ||
-    ""
-  );
-}
-
 export async function exportSettings() {
   return await readRaw();
 }

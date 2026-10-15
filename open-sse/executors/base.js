@@ -11,8 +11,10 @@ import { resolveOpenAICompatibleApiType } from "../services/provider.js";
 export class BaseExecutor {
   constructor(provider, config) {
     this.provider = provider;
-    this.config = config;
-    this.noAuth = config?.noAuth || false;
+    // Custom (compatible) endpoints have no registry entry — an empty config
+    // keeps the generic paths (buildUrl/buildHeaders) working.
+    this.config = config || {};
+    this.noAuth = this.config.noAuth || false;
   }
 
   getProvider() {

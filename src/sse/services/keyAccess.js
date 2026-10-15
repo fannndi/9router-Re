@@ -133,7 +133,7 @@ export async function enforceKeyAccess(ctx, requested) {
 
 /**
  * Gate for endpoints that resolve a single provider/model themselves
- * (embeddings, stt, systemone, video, Gemini-native TTS). A missing model
+ * (embeddings, stt, video, Gemini-native TTS). A missing model
  * (e.g. a multipart video body we do not parse) is denied for restricted keys:
  * an unverifiable target is not an allowed one.
  */
