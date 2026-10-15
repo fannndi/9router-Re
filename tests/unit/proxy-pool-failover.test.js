@@ -106,6 +106,37 @@ describe("noteProxyPoolFailure", () => {
   });
 });
 
+describe("model-scoped cooldowns", () => {
+  // Free-tier limits are handed out per IP *and* per model. A limited model
+  // must not park an entry for its siblings, or the second model pays a
+  // pointless 429 before failing over.
+  it("keeps a limited model on cooldown without touching another model", () => {
+    noteProxyPoolFailure(DIRECT_POOL_KEY, 429, "rate limit exceeded", 0, "model-a");
+
+    expect(isProxyPoolCoolingDown(DIRECT_POOL_KEY, "model-a")).toBe(true);
+    expect(isProxyPoolCoolingDown(DIRECT_POOL_KEY, "model-b")).toBe(false);
+
+    expect(pickChainEntry(chain(), new Set(), "model-a").key).toBe(POOL_KEY);
+    expect(pickChainEntry(chain(), new Set(), "model-b").key).toBe(DIRECT_POOL_KEY);
+  });
+
+  it("clears only the model that answered", () => {
+    noteProxyPoolFailure(POOL_KEY, 429, "rate limit exceeded", 0, "model-a");
+    noteProxyPoolFailure(POOL_KEY, 429, "rate limit exceeded", 0, "model-b");
+
+    noteProxyPoolSuccess(POOL_KEY, "model-a");
+
+    expect(isProxyPoolCoolingDown(POOL_KEY, "model-a")).toBe(false);
+    expect(isProxyPoolCoolingDown(POOL_KEY, "model-b")).toBe(true);
+  });
+
+  it("treats an entry and its model as one key", () => {
+    noteProxyPoolFailure(DIRECT_POOL_KEY, 429, "rate limit exceeded", 0, "model-a");
+    // A different entry must stay usable for the same model.
+    expect(isProxyPoolCoolingDown(POOL_KEY, "model-a")).toBe(false);
+  });
+});
+
 describe("noteProxyPoolSuccess", () => {
   it("clears the cooldown of the entry that answered", () => {
     noteProxyPoolFailure(POOL_KEY, 429, "rate limit exceeded");

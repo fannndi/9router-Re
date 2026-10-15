@@ -205,6 +205,10 @@ export async function resolveConnectionProxyConfig(
 // An entry that answers 429 is put on a cooldown so the next request skips it
 // instead of paying a fresh round trip to the same wall. Direct is a chain
 // entry like any other and is keyed by DIRECT_POOL_KEY.
+//
+// Cooldowns are scoped per model on purpose: free-tier limits are handed out
+// per IP *and* per model (one model can be exhausted while another still
+// answers), so a limited model must not park the whole entry for its siblings.
 export const DIRECT_POOL_KEY = "__direct__";
 
 // A rate limit belongs to a time window, not to a broken proxy: the floor
@@ -215,19 +219,19 @@ export const DIRECT_POOL_KEY = "__direct__";
 const POOL_COOLDOWN_MIN_MS = 30 * 1000;
 const POOL_COOLDOWN_MAX_MS = 60 * 60 * 1000;
 
-const poolHealth = new Map(); // key → { backoffLevel, cooldownUntil }
+const poolHealth = new Map(); // "poolKey::model" → { backoffLevel, cooldownUntil }
 
-function healthKey(poolKey) {
-  return poolKey || DIRECT_POOL_KEY;
+function healthKey(poolKey, model = "") {
+  return `${poolKey || DIRECT_POOL_KEY}::${model || ""}`;
 }
 
-export function isProxyPoolCoolingDown(poolKey) {
-  const state = poolHealth.get(healthKey(poolKey));
+export function isProxyPoolCoolingDown(poolKey, model = "") {
+  const state = poolHealth.get(healthKey(poolKey, model));
   return !!(state && state.cooldownUntil > Date.now());
 }
 
-export function getProxyPoolCooldownUntil(poolKey) {
-  const state = poolHealth.get(healthKey(poolKey));
+export function getProxyPoolCooldownUntil(poolKey, model = "") {
+  const state = poolHealth.get(healthKey(poolKey, model));
   return state && state.cooldownUntil > Date.now() ? state.cooldownUntil : 0;
 }
 
@@ -235,8 +239,8 @@ export function getProxyPoolCooldownUntil(poolKey) {
  * Record a failed attempt against a chain entry.
  * @returns {number} applied cooldown in ms (0 when the error is not worth one)
  */
-export function noteProxyPoolFailure(poolKey, status, errorText, retryAfterMs = 0) {
-  const key = healthKey(poolKey);
+export function noteProxyPoolFailure(poolKey, status, errorText, retryAfterMs = 0, model = "") {
+  const key = healthKey(poolKey, model);
   const prev = poolHealth.get(key) || { backoffLevel: 0, cooldownUntil: 0 };
   const { shouldFallback, cooldownMs, newBackoffLevel } = checkFallbackError(
     status,
@@ -257,8 +261,8 @@ export function noteProxyPoolFailure(poolKey, status, errorText, retryAfterMs = 
   return cooldown;
 }
 
-export function noteProxyPoolSuccess(poolKey) {
-  poolHealth.delete(healthKey(poolKey));
+export function noteProxyPoolSuccess(poolKey, model = "") {
+  poolHealth.delete(healthKey(poolKey, model));
 }
 
 export function resetProxyPoolHealth() {
@@ -269,20 +273,21 @@ export function resetProxyPoolHealth() {
  * Pick the next entry of a failover chain for one request.
  *
  * Entries already tried by this request are skipped first, then entries on
- * cooldown. When every remaining entry is cooling down the one that recovers
- * first is used anyway: failing fast on a stale cooldown is worse than one
- * more try. Returns null when the request already tried every entry.
+ * cooldown for this model. When every remaining entry is cooling down the one
+ * that recovers first is used anyway: failing fast on a stale cooldown is
+ * worse than one more try. Returns null when the request already tried every
+ * entry.
  */
-export function pickChainEntry(chain, attemptedKeys = new Set()) {
+export function pickChainEntry(chain, attemptedKeys = new Set(), model = "") {
   if (!Array.isArray(chain) || chain.length === 0) return null;
 
   const remaining = chain.filter((entry) => entry && !attemptedKeys.has(entry.key));
   if (remaining.length === 0) return null;
 
-  const ready = remaining.find((entry) => !isProxyPoolCoolingDown(entry.key));
+  const ready = remaining.find((entry) => !isProxyPoolCoolingDown(entry.key, model));
   if (ready) return ready;
 
   return remaining.reduce((best, entry) =>
-    getProxyPoolCooldownUntil(entry.key) < getProxyPoolCooldownUntil(best.key) ? entry : best
+    getProxyPoolCooldownUntil(entry.key, model) < getProxyPoolCooldownUntil(best.key, model) ? entry : best
   );
 }

@@ -347,7 +347,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     });
 
     if (result.success) {
-      if (credentials._poolFailover) noteProxyPoolSuccess(credentials._poolFailover.key);
+      if (credentials._poolFailover) noteProxyPoolSuccess(credentials._poolFailover.key, model);
       return result.response;
     }
 
@@ -368,7 +368,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
           headers: upstreamResponseHeaders(result.response?.headers),
         };
       }
-      noteProxyPoolFailure(poolFailover.key, result.status, result.error, poolRetryAfterMs(result));
+      noteProxyPoolFailure(poolFailover.key, result.status, result.error, poolRetryAfterMs(result), model);
       if (failoverState.attempted.size < poolFailover.chainLength) {
         log.warn("FALLBACK", `⇄ POOL:${poolFailover.key} UNAVAILABLE (${result.status}) → NEXT POOL`);
         lastError = result.error;

@@ -27,7 +27,7 @@ function githubMonthlyResetMs(status, errorText, provider) {
  * Returns null when failover is not configured for this provider, so callers
  * fall back to the connection/rotation behaviour.
  */
-async function resolveFailoverEntry(providerId, settings, failoverState) {
+async function resolveFailoverEntry(providerId, settings, failoverState, model = "") {
   const override = (settings?.providerStrategies || {})[providerId] || {};
   if (override.rotateStrategy !== "failover") return null;
 
@@ -41,7 +41,7 @@ async function resolveFailoverEntry(providerId, settings, failoverState) {
   }
 
   const attempted = failoverState?.attempted instanceof Set ? failoverState.attempted : new Set();
-  const entry = pickChainEntry(chain, attempted) || chain[0];
+  const entry = pickChainEntry(chain, attempted, model) || chain[0];
   return { ...entry, chainLength: chain.length };
 }
 
@@ -77,7 +77,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const strategy = override.rotateStrategy || "none";
 
       // Failover mode: direct first, selected pool on 429 (per-request chain state).
-      const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState);
+      const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState, model);
       if (failoverEntry) {
         const resolvedProxy = await resolveConnectionProxyConfig({
           proxyPoolId: failoverEntry.poolId || "",
@@ -254,7 +254,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       connection = availableConnections[0];
     }
 
-    const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState);
+    const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState, model);
     const resolvedProxy = failoverEntry
       ? await resolveConnectionProxyConfig({ proxyPoolId: failoverEntry.poolId || "" })
       : await resolveConnectionProxyConfig(connection.providerSpecificData || {});
