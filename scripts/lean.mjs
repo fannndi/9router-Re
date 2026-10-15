@@ -1098,6 +1098,7 @@ const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "trave
       "src/shared/services/quotaAutoPing.js",
       "src/shared/components/UsageStats.js",
       "src/shared/components/RequestLogger.js",
+      "src/sse/services/antigravityQuota.js",
     ],
     deps: { remove: ["recharts", "@xyflow/react"] },
     patch: [
@@ -1270,6 +1271,120 @@ function hasQuotaAutoPingEnabled(settings) {
 `,
         replace: "",
         checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/layouts/DashboardLayout.js",
+        find: `  // Preload heavy usage charts in background when browser is idle
+  useEffect(() => {
+    const preload = () => {
+      import("@/shared/components/UsageStats").catch(() => {});
+      import("@/app/(dashboard)/dashboard/usage/components/UsageChart").catch(() => {});
+      import("@/app/(dashboard)/dashboard/usage/components/ProviderBarChart").catch(() => {});
+      import("@/app/(dashboard)/dashboard/usage/components/TopModelsChart").catch(() => {});
+    };
+    if (typeof window !== "undefined") {
+      if ("requestIdleCallback" in window) {
+        const id = window.requestIdleCallback(preload, { timeout: 4000 });
+        return () => window.cancelIdleCallback(id);
+      }
+      const timer = setTimeout(preload, 2500);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/sse/services/auth.js",
+        find: `import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/sse/services/auth.js",
+        find: `
+    // Antigravity quota cache is lazy: only populated after that account returns 409/429.
+    const isAntigravity = providerId === "antigravity";
+    const antigravityQuotaCache = isAntigravity && model ? getAntigravityQuotaCache() : null;
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/sse/services/auth.js",
+        find: `      // Antigravity: skip if live quota exhausted for this model
+      if (isAntigravity && model && antigravityQuotaCache) {
+        const connQuotas = antigravityQuotaCache.get(c.id);
+        const quota = getAntigravityModelQuota(connQuotas, model) || connQuotas?.[model];
+        if (quota && quota.remainingPercentage <= 0 && quota.resetAt && new Date(quota.resetAt).getTime() > Date.now()) {
+          const account = c.id?.slice(0, 8) || "unknown";
+          log.info("AG_QUOTA", \`\${account} | CACHE_BLOCK \${model} — skip upstream until \${quota.resetAt}\`);
+          return false;
+        }
+      }
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/sse/services/auth.js",
+        find: `      // Find earliest persistent lock or lazy Antigravity quota-cache reset for retry timing.
+      const lockedConns = connections.filter(c => isModelLockActive(c, model));
+      const expiries = lockedConns.map(c => getEarliestModelLockUntil(c)).filter(Boolean);
+      if (isAntigravity && model && antigravityQuotaCache) {
+        connections.forEach((c) => {
+          const connQuotas = antigravityQuotaCache.get(c.id);
+          const quota = getAntigravityModelQuota(connQuotas, model) || connQuotas?.[model];
+          const resetAt = quota?.resetAt;
+          if (resetAt && new Date(resetAt).getTime() > Date.now()) expiries.push(resetAt);
+        });
+      }
+      const earliest = expiries.sort()[0] || null;`,
+        replace: `      // Find earliest persistent lock for retry timing.
+      const lockedConns = connections.filter(c => isModelLockActive(c, model));
+      const expiries = lockedConns.map(c => getEarliestModelLockUntil(c)).filter(Boolean);
+      const earliest = expiries.sort()[0] || null;`,
+        check: `// Find earliest persistent lock for retry timing.`,
+      },
+      {
+        file: "src/sse/handlers/chat.js",
+        find: `import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/sse/handlers/chat.js",
+        find: `        // "Consecutive" strikes: a success clears the breaker for this pair.
+        clearAntigravityStrikes(credentials.connectionId, model);
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/sse/handlers/chat.js",
+        find: `    // Antigravity 409/429: refresh live quota to get exact resetAt before locking
+    let quotaResetMs = null;
+    let resetsAtMs = result.resetsAtMs;
+    if (provider === "antigravity" && (result.status === 409 || result.status === 429)) {
+      quotaResetMs = await handleAntigravityQuotaError(
+        credentials.connectionId, result.status, model,
+        refreshedCredentials.accessToken, credentials.providerSpecificData
+      );
+      if (quotaResetMs) resetsAtMs = quotaResetMs;
+    }
+
+    // Exhausted Antigravity model is blocked only in RAM cache until upstream resetAt.
+    // Do not persist a modelLock_* for this path.
+    const shouldFallback = provider === "antigravity" && quotaResetMs
+      ? true
+      : (await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model, resetsAtMs)).shouldFallback;`,
+        replace: `    const resetsAtMs = result.resetsAtMs;
+    const shouldFallback = (await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model, resetsAtMs)).shouldFallback;`,
+        check: `const shouldFallback = (await markAccountUnavailable(`,
       },
     ],
   },

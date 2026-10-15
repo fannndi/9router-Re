@@ -105,26 +105,11 @@ async function runHeavyStartup() {
 
   configureTunnelMonitoring(settings);
 
-  if (hasQuotaAutoPingEnabled(settings)) {
-    import("@/shared/services/quotaAutoPing")
-      .then(({ startQuotaAutoPing }) => startQuotaAutoPing())
-      .catch((e) => console.log("[AutoPing] scheduler start failed:", e.message));
-  }
-
   // Proactive OAuth token refresh (e.g. grok-cli ~6h TTL). Module is idempotent
   // and also started from custom-server.js when that entry is used.
   import("@/sse/services/backgroundTokenRefresh.js")
     .then(({ startBackgroundTokenRefresh }) => startBackgroundTokenRefresh())
     .catch((e) => console.log("[BackgroundTokenRefresh] scheduler start failed:", e.message));
-}
-
-// Cheap local check: keeps the scheduler module (and its provider graph) unloaded
-// when nothing opted in. An enabled schedule counts on its own.
-function hasQuotaAutoPingEnabled(settings) {
-  return [settings?.claudeAutoPing, settings?.codexAutoPing].some((config) => (
-    Object.values(config?.connections || {}).some(Boolean)
-    || Object.values(config?.schedules || {}).some((schedule) => schedule?.enabled === true)
-  ));
 }
 
 async function autoStartMitm(settings) {

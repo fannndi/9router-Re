@@ -57,18 +57,6 @@ export {
   getDisabledModels, getDisabledByProvider, disableModels, enableModels,
 } from "./repos/disabledModelsRepo.js";
 
-// Usage
-export {
-  statsEmitter, trackPendingRequest, getActiveRequests,
-  saveRequestUsage, getUsageHistory, getUsageStats, getChartData,
-  appendRequestLog, getRecentLogs,
-} from "./repos/usageRepo.js";
-
-// Request details
-export {
-  saveRequestDetail, getRequestDetails, getRequestDetailById, getDistinctProviders,
-} from "./repos/requestDetailsRepo.js";
-
 // Export/import full DB
 export async function exportDb() {
   const db = await getAdapter();

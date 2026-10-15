@@ -53,7 +53,6 @@ const PROTECTED_API_PATHS = [
   "/api/proxy-pools",
   "/api/combos",
   "/api/models",
-  "/api/usage",
   "/api/oauth",
   "/api/cloud",
   "/api/media-providers",
