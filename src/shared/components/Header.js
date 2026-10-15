@@ -60,13 +60,6 @@ const getPageInfo = (pathname) => {
       icon: "vpn_key",
       breadcrumbs: [],
     };
-  if (pathname.includes("/token-saver"))
-    return {
-      title: "Token Saver",
-      description: "Compress prompts and outputs to save tokens",
-      icon: "savings",
-      breadcrumbs: [],
-    };
   if (pathname.includes("/proxy-pools"))
     return {
       title: "Proxy Pools",
