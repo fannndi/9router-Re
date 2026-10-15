@@ -30,7 +30,10 @@ out.
   `pricing.js`, `shared.js`, `visionPatterns.js`, `thinkingLevels.js`, `models/` (helpers +
   schema for alias/family resolution).
 - `handlers/` — `chatCore.js` + `chatCore/` (streaming / non-streaming / sse-to-json) and
-  `chatCore/requestDetail.js` (log-only). Media cores and `responsesHandler.js` removed.
+  `chatCore/requestDetail.js` (log-only). `chatCore.js` also renders the pool label on the
+  request line (`POOL:"<name>" (i/N)`) and the pool name in the `[PROXY]` line; both come from
+  `credentials._poolFailover` / `providerSpecificData.connectionProxyPoolName` (set by the chat
+  handler — open-sse must not read the DB). Media cores and `responsesHandler.js` removed.
 - `services/` — `model.js`, `provider.js`, `combo.js` (fallback / round-robin / fusion),
   `capacityAdapter.js` (**vision pool only**), `accountFallback.js`, `tokenRefresh*`
   (API shape kept; no OAuth providers remain), `oauthCredentialManager.js`.

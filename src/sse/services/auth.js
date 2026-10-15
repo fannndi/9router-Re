@@ -1,5 +1,5 @@
-import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools, getProxyPoolById } from "@/lib/localDb";
-import { resolveConnectionProxyConfig, pickProxyPoolId, pickChainEntry, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";
+import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings } from "@/lib/localDb";
+import { resolveConnectionProxyConfig, pickChainEntry, buildPoolPlan, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
@@ -18,30 +18,22 @@ function githubMonthlyResetMs(status, errorText, provider) {
 }
 
 /**
- * Failover mode (settings.providerStrategies[provider].rotateStrategy ===
- * "failover") resolves an ordered chain: direct first, then the selected pool.
- * failoverState.attempted is owned by the chat loop for one client request, so
- * a retry after a 429 lands on the next chain entry instead of the same wall.
+ * Failover / rotation chains are built per client request by the chat loop
+ * (buildPoolPlan) and handed in via `options.poolPlan`, so the round-robin
+ * start pool advances exactly once per request. This function only resolves
+ * the next usable entry of that plan.
  *
- * Returns null when failover is not configured for this provider, so callers
- * fall back to the connection/rotation behaviour.
+ * Returns null when the plan has no entries, so callers fall back to the
+ * connection/rotation behaviour.
  */
-async function resolveFailoverEntry(providerId, settings, failoverState, model = "") {
-  const override = (settings?.providerStrategies || {})[providerId] || {};
-  if (override.rotateStrategy !== "failover") return null;
-
-  const chain = [{ key: DIRECT_POOL_KEY, poolId: null }];
-  const configuredPoolId = String(override.proxyPoolId || "").trim();
-  if (configuredPoolId && configuredPoolId !== "__none__") {
-    const pool = await getProxyPoolById(configuredPoolId);
-    if (pool?.isActive === true && String(pool.proxyUrl || "").trim()) {
-      chain.push({ key: configuredPoolId, poolId: configuredPoolId });
-    }
-  }
-
+function pickPlanEntry(plan, failoverState, model = "") {
+  const chain = Array.isArray(plan?.chain) ? plan.chain : [];
+  if (chain.length === 0) return null;
   const attempted = failoverState?.attempted instanceof Set ? failoverState.attempted : new Set();
   const entry = pickChainEntry(chain, attempted, model) || chain[0];
-  return { ...entry, chainLength: chain.length };
+  return entry
+    ? { ...entry, chainIndex: chain.indexOf(entry), chainLength: chain.length }
+    : null;
 }
 
 /**
@@ -72,43 +64,14 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
     if (FREE_PROVIDERS[providerId]?.noAuth) {
       const settings = await getSettings();
-      const override = (settings.providerStrategies || {})[providerId] || {};
-      const strategy = override.rotateStrategy || "none";
+      const plan = options?.poolPlan || await buildPoolPlan(providerId, settings);
+      const entry = pickPlanEntry(plan, options?.failoverState, model);
 
-      // Failover mode: direct first, selected pool on 429 (per-request chain state).
-      const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState, model);
-      if (failoverEntry) {
-        const resolvedProxy = await resolveConnectionProxyConfig({
-          proxyPoolId: failoverEntry.poolId || "",
-        });
-        return {
-          id: "noauth",
-          connectionName: "Public",
-          isActive: true,
-          accessToken: "public",
-          providerSpecificData: {
-            connectionProxyEnabled: resolvedProxy.connectionProxyEnabled,
-            connectionProxyUrl: resolvedProxy.connectionProxyUrl,
-            connectionNoProxy: resolvedProxy.connectionNoProxy,
-            connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
-          },
-          _poolFailover: {
-            enabled: true,
-            key: failoverEntry.key,
-            poolId: failoverEntry.poolId || null,
-            chainLength: failoverEntry.chainLength,
-          },
-        };
-      }
+      const resolvedProxy = await resolveConnectionProxyConfig({
+        proxyPoolId: entry?.poolId || "",
+      });
 
-      let pickedId = override.proxyPoolId || null;
-      if (strategy !== "none") {
-        const allPools = await getProxyPools({ isActive: true });
-        const poolIds = allPools.filter(p => p.proxyUrl).map(p => p.id);
-        pickedId = pickProxyPoolId(poolIds, strategy, providerId);
-      }
-      const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
-      return {
+      const credentials = {
         id: "noauth",
         connectionName: "Public",
         isActive: true,
@@ -118,10 +81,25 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           connectionProxyUrl: resolvedProxy.connectionProxyUrl,
           connectionNoProxy: resolvedProxy.connectionNoProxy,
           connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
-          vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+          connectionProxyPoolName: entry?.poolId ? entry.label : null,
           strictProxy: resolvedProxy.strictProxy === true,
         },
       };
+
+      // The chat loop walks a plan entry list; one entry (or none) means there
+      // is nothing to walk, which keeps the pre-chain behaviour.
+      if (entry) {
+        credentials._poolFailover = {
+          enabled: true,
+          key: entry.key,
+          poolId: entry.poolId || null,
+          label: entry.label || null,
+          index: entry.chainIndex,
+          chainLength: entry.chainLength,
+        };
+      }
+
+      return credentials;
     }
 
     const connections = await getProviderConnections({ provider: providerId, isActive: true });
@@ -230,7 +208,11 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       connection = availableConnections[0];
     }
 
-    const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState, model);
+    // Compat connections keep their own proxy unless the provider is in
+    // failover mode; the per-request plan then provides the chain entry.
+    const failoverEntry = options?.poolPlan?.strategy === "failover"
+      ? pickPlanEntry(options.poolPlan, options?.failoverState, model)
+      : null;
     const resolvedProxy = failoverEntry
       ? await resolveConnectionProxyConfig({ proxyPoolId: failoverEntry.poolId || "" })
       : await resolveConnectionProxyConfig(connection.providerSpecificData || {});
@@ -253,7 +235,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         connectionProxyUrl: resolvedProxy.connectionProxyUrl,
         connectionNoProxy: resolvedProxy.connectionNoProxy,
         connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
-        vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+        connectionProxyPoolName: failoverEntry?.poolId ? failoverEntry.label : null,
         strictProxy: resolvedProxy.strictProxy === true,
       },
       connectionId: connection.id,
@@ -262,12 +244,14 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       lastError: connection.lastError,
       // Pass full connection for clearAccountError to read modelLock_* keys
       _connection: connection,
-      // Failover mode bookkeeping for the chat loop (see resolveFailoverEntry)
+      // Chain bookkeeping for the chat loop (see pickPlanEntry)
       _poolFailover: failoverEntry
         ? {
             enabled: true,
             key: failoverEntry.key,
             poolId: failoverEntry.poolId || null,
+            label: failoverEntry.label || null,
+            index: failoverEntry.chainIndex,
             chainLength: failoverEntry.chainLength,
           }
         : null,

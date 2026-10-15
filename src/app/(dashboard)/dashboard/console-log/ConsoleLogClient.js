@@ -26,7 +26,7 @@ export default function ConsoleLogClient() {
 
   const handleClear = async () => {
     try {
-      await fetch("/api/translator/console-logs", { method: "DELETE" });
+      await fetch("/api/console-log", { method: "DELETE" });
       // UI cleared via SSE "clear" event
     } catch (err) {
       console.error("Failed to clear console logs:", err);
@@ -34,7 +34,7 @@ export default function ConsoleLogClient() {
   };
 
   useEffect(() => {
-    const es = new EventSource("/api/translator/console-logs/stream");
+    const es = new EventSource("/api/console-log/stream");
 
     es.onopen = () => setConnected(true);
 

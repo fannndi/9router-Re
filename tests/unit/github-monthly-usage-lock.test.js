@@ -5,10 +5,13 @@ const dbMocks = vi.hoisted(() => ({
   updateProviderConnection: vi.fn(),
 }));
 
-vi.mock("@/lib/localDb", () => dbMocks);
+vi.mock("@/lib/localDb", () => ({ ...dbMocks, getSettings: vi.fn() }));
 vi.mock("@/lib/network/connectionProxy", () => ({
   pickProxyPoolId: vi.fn(),
   resolveConnectionProxyConfig: vi.fn(),
+  buildPoolPlan: vi.fn(async () => ({ strategy: "none", chain: [] })),
+  pickChainEntry: vi.fn(() => null),
+  DIRECT_POOL_KEY: "__direct__",
 }));
 vi.mock("@/shared/constants/providers.js", () => ({
   FREE_PROVIDERS: {},

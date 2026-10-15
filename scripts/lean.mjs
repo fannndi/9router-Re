@@ -55,6 +55,13 @@ function applyPatch(rule, { dry = false } = {}) {
   const abs = path.join(ROOT, rule.file);
   if (!fs.existsSync(abs)) {
     if (rule.overlay) return "skip";
+    // A file deleted by another phase in this run is expected to be gone: the
+    // patch that would target it is already resolved. A file nobody deletes
+    // and nobody patches is still an error (upstream moved the patch site).
+    const deletedByPhases = Object.values(PHASES).some((phase) =>
+      (phase?.delete || []).some((rel) => rel === rule.file || rule.file.startsWith(`${rel}/`))
+    );
+    if (deletedByPhases) return "skip";
     throw new Error(`patch target missing: ${rule.file}`);
   }
   let src = fs.readFileSync(abs, "utf8");
@@ -2335,7 +2342,6 @@ import Tooltip from "./components/Tooltip";
       "src/app/api/oauth",
       "src/app/callback",
       "src/app/api/providers/kilo",
-      "src/app/api/providers/suggested-models",
       "src/shared/components/OAuthModal.js",
       "src/shared/components/KiroOAuthWrapper.js",
       "src/shared/components/KiroSocialOAuthModal.js",
@@ -3587,6 +3593,616 @@ PHASES.sweep = {
     { file: "src/app/(dashboard)/dashboard/proxy-pools/page.js", overlay: "scripts/lean/overlays/src/app/(dashboard)/dashboard/proxy-pools/page.js" },
     { file: "src/app/api/v1beta/models/[...path]/route.js", overlay: "scripts/lean/overlays/src/app/api/v1beta/models/[...path]/route.js" },
     { file: "src/shared/utils/bulkAdd.js", overlay: "scripts/lean/overlays/src/shared/utils/bulkAdd.js" },
+  ],
+};
+
+// ─── pool-obs ──────────────────────────────────────────────────────────────
+// Pool observability + 2-pool chains on top of the sweep:
+//   - Console Log restored (routes live at /api/console-log*, client patched)
+//   - per-request pool attribution in log lines ("POOL:"/"pool=" with names)
+//   - ordered failover chains ("__all__" = every active pool by failoverOrder)
+//   - round-robin start pool rotates once per request, then walks on failure
+//   - Proxy Pools: "Failover order" field (+ #n badge) and "Check setup" modal
+//   - scripts/ensure-pool.mjs lets mobile-pool/setup.sh register the pool itself
+// New files (console-log routes, diagnose route, ensure-pool.mjs) are plain
+// additions and need no rule; this phase patches the upstream files.
+PHASES["pool-obs"] = {
+  title: "pool observability: console log, named pools, ordered chains, setup check",
+  patch: [
+    // ── connectionProxy: ordered pool plan (per-request chain)
+    {
+      file: "src/lib/network/connectionProxy.js",
+      find: `import { getProxyPoolById } from "@/models";`,
+      replace: `import { getProxyPoolById, getProxyPools } from "@/models";\nimport { getSettings } from "@/lib/localDb";`,
+    },
+    {
+      file: "src/lib/network/connectionProxy.js",
+      find: `  return remaining.reduce((best, entry) =>
+    getProxyPoolCooldownUntil(best.key, model) < getProxyPoolCooldownUntil(entry.key, model) ? entry : best
+  );
+}`,
+      replace: `  return remaining.reduce((best, entry) =>
+    getProxyPoolCooldownUntil(best.key, model) < getProxyPoolCooldownUntil(entry.key, model) ? entry : best
+  );
+}
+
+// ─── Per-request pool chain ────────────────────────────────────────────────
+// The chat loop builds ONE plan per client request (so round-robin advances its
+// start pool exactly once per request, not once per retry) and then walks the
+// chain on pool-worthy failures. Entry shape: { key, poolId, label }.
+//
+//   failover     → [ direct, ...pools ]      pools = selected pool, or all
+//                                            active pools ordered by
+//                                            \`failoverOrder\` (then createdAt)
+//                                            when "__all__" is selected
+//   round-robin  → [...pools rotated to the next start index]
+//   random       → [...pools starting at a random index]
+//   none         → [ selectedPool ]          (or [] → direct)
+export const ALL_POOLS_KEY = "__all__";
+export const NONE_POOL_KEY = "__none__";
+const DIRECT_LABEL = "direct";
+const DEFAULT_FAILOVER_ORDER = 100;
+
+function poolFailoverOrder(pool) {
+  const n = Number(pool?.failoverOrder);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FAILOVER_ORDER;
+}
+
+/** Active pools with a URL, ordered for the failover chain. */
+export async function getOrderedActivePools() {
+  const pools = await getProxyPools({ isActive: true });
+  return pools
+    .filter((pool) => String(pool?.proxyUrl || "").trim())
+    .sort((a, b) => (poolFailoverOrder(a) - poolFailoverOrder(b))
+      || (new Date(a.createdAt || 0) - new Date(b.createdAt || 0)));
+}
+
+// Pool names for log lines. Short TTL so a rename shows up without a restart.
+const poolNameCache = new Map(); // id → { name, at }
+const POOL_NAME_TTL_MS = 10 * 1000;
+
+export async function getPoolName(poolId) {
+  if (!poolId) return null;
+  const hit = poolNameCache.get(poolId);
+  if (hit && Date.now() - hit.at < POOL_NAME_TTL_MS) return hit.name;
+  try {
+    const pool = await getProxyPoolById(poolId);
+    const name = pool?.name || null;
+    poolNameCache.set(poolId, { name, at: Date.now() });
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the ordered chain of pool entries a single client request may use.
+ * @returns {{ strategy: string, chain: Array<{key: string, poolId: string|null, label: string}> }}
+ */
+export async function buildPoolPlan(providerId, settings = null) {
+  const resolvedSettings = settings || await getSettings();
+  const override = (resolvedSettings?.providerStrategies || {})[providerId] || {};
+  const strategy = override.rotateStrategy || "none";
+  const selected = String(override.proxyPoolId || "").trim();
+
+  const toEntry = (pool) => ({
+    key: pool.id,
+    poolId: pool.id,
+    label: pool.name || pool.id.slice(0, 8),
+  });
+
+  let chain = [];
+
+  if (strategy === "failover") {
+    chain = [{ key: DIRECT_POOL_KEY, poolId: null, label: DIRECT_LABEL }];
+    const activePools = await getOrderedActivePools();
+    if (selected === ALL_POOLS_KEY) {
+      chain.push(...activePools.map(toEntry));
+    } else if (selected && selected !== NONE_POOL_KEY) {
+      const pool = activePools.find((p) => p.id === selected);
+      if (pool) chain.push(toEntry(pool));
+    }
+  } else if (strategy === "round-robin" || strategy === "random") {
+    const activePools = await getOrderedActivePools();
+    if (activePools.length > 0) {
+      // pickProxyPoolId advances the in-memory rotation state; calling it once
+      // per plan keeps the start pool alternating once per client request.
+      const startId = pickProxyPoolId(activePools.map((p) => p.id), strategy, providerId);
+      const idx = Math.max(0, activePools.findIndex((p) => p.id === startId));
+      chain = [...activePools.slice(idx), ...activePools.slice(0, idx)].map(toEntry);
+    }
+  } else if (selected && selected !== NONE_POOL_KEY && selected !== ALL_POOLS_KEY) {
+    const activePools = await getOrderedActivePools();
+    const pool = activePools.find((p) => p.id === selected);
+    if (pool) chain = [toEntry(pool)];
+  }
+
+  return { strategy, chain, useAllPools: selected === ALL_POOLS_KEY };
+}`,
+      check: `export async function buildPoolPlan(`,
+    },
+    // ── auth.js: plan-based chain + labels
+    {
+      file: "src/sse/services/auth.js",
+      find: `import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools, getProxyPoolById } from "@/lib/localDb";
+import { resolveConnectionProxyConfig, pickProxyPoolId, pickChainEntry, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";`,
+      replace: `import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings } from "@/lib/localDb";
+import { resolveConnectionProxyConfig, pickChainEntry, buildPoolPlan, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";`,
+    },
+    {
+      file: "src/sse/services/auth.js",
+      find: `/**
+ * Failover mode (settings.providerStrategies[provider].rotateStrategy ===
+ * "failover") resolves an ordered chain: direct first, then the selected pool.
+ * failoverState.attempted is owned by the chat loop for one client request, so
+ * a retry after a 429 lands on the next chain entry instead of the same wall.
+ *
+ * Returns null when failover is not configured for this provider, so callers
+ * fall back to the connection/rotation behaviour.
+ */
+async function resolveFailoverEntry(providerId, settings, failoverState, model = "") {
+  const override = (settings?.providerStrategies || {})[providerId] || {};
+  if (override.rotateStrategy !== "failover") return null;
+
+  const chain = [{ key: DIRECT_POOL_KEY, poolId: null }];
+  const configuredPoolId = String(override.proxyPoolId || "").trim();
+  if (configuredPoolId && configuredPoolId !== "__none__") {
+    const pool = await getProxyPoolById(configuredPoolId);
+    if (pool?.isActive === true && String(pool.proxyUrl || "").trim()) {
+      chain.push({ key: configuredPoolId, poolId: configuredPoolId });
+    }
+  }
+
+  const attempted = failoverState?.attempted instanceof Set ? failoverState.attempted : new Set();
+  const entry = pickChainEntry(chain, attempted, model) || chain[0];
+  return { ...entry, chainLength: chain.length };
+}`,
+      replace: `/**
+ * Failover / rotation chains are built per client request by the chat loop
+ * (buildPoolPlan) and handed in via \`options.poolPlan\`, so the round-robin
+ * start pool advances exactly once per request. This function only resolves
+ * the next usable entry of that plan.
+ *
+ * Returns null when the plan has no entries, so callers fall back to the
+ * connection/rotation behaviour.
+ */
+function pickPlanEntry(plan, failoverState, model = "") {
+  const chain = Array.isArray(plan?.chain) ? plan.chain : [];
+  if (chain.length === 0) return null;
+  const attempted = failoverState?.attempted instanceof Set ? failoverState.attempted : new Set();
+  const entry = pickChainEntry(chain, attempted, model) || chain[0];
+  return entry
+    ? { ...entry, chainIndex: chain.indexOf(entry), chainLength: chain.length }
+    : null;
+}`,
+    },
+    {
+      file: "src/sse/services/auth.js",
+      find: `    if (FREE_PROVIDERS[providerId]?.noAuth) {
+      const settings = await getSettings();
+      const override = (settings.providerStrategies || {})[providerId] || {};
+      const strategy = override.rotateStrategy || "none";
+
+      // Failover mode: direct first, selected pool on 429 (per-request chain state).
+      const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState, model);
+      if (failoverEntry) {
+        const resolvedProxy = await resolveConnectionProxyConfig({
+          proxyPoolId: failoverEntry.poolId || "",
+        });
+        return {
+          id: "noauth",
+          connectionName: "Public",
+          isActive: true,
+          accessToken: "public",
+          providerSpecificData: {
+            connectionProxyEnabled: resolvedProxy.connectionProxyEnabled,
+            connectionProxyUrl: resolvedProxy.connectionProxyUrl,
+            connectionNoProxy: resolvedProxy.connectionNoProxy,
+            connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
+          },
+          _poolFailover: {
+            enabled: true,
+            key: failoverEntry.key,
+            poolId: failoverEntry.poolId || null,
+            chainLength: failoverEntry.chainLength,
+          },
+        };
+      }
+
+      let pickedId = override.proxyPoolId || null;
+      if (strategy !== "none") {
+        const allPools = await getProxyPools({ isActive: true });
+        const poolIds = allPools.filter(p => p.proxyUrl).map(p => p.id);
+        pickedId = pickProxyPoolId(poolIds, strategy, providerId);
+      }
+      const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
+      return {
+        id: "noauth",
+        connectionName: "Public",
+        isActive: true,
+        accessToken: "public",
+        providerSpecificData: {
+          connectionProxyEnabled: resolvedProxy.connectionProxyEnabled,
+          connectionProxyUrl: resolvedProxy.connectionProxyUrl,
+          connectionNoProxy: resolvedProxy.connectionNoProxy,
+          connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
+          vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+          strictProxy: resolvedProxy.strictProxy === true,
+        },
+      };
+    }`,
+      replace: `    if (FREE_PROVIDERS[providerId]?.noAuth) {
+      const settings = await getSettings();
+      const plan = options?.poolPlan || await buildPoolPlan(providerId, settings);
+      const entry = pickPlanEntry(plan, options?.failoverState, model);
+
+      const resolvedProxy = await resolveConnectionProxyConfig({
+        proxyPoolId: entry?.poolId || "",
+      });
+
+      const credentials = {
+        id: "noauth",
+        connectionName: "Public",
+        isActive: true,
+        accessToken: "public",
+        providerSpecificData: {
+          connectionProxyEnabled: resolvedProxy.connectionProxyEnabled,
+          connectionProxyUrl: resolvedProxy.connectionProxyUrl,
+          connectionNoProxy: resolvedProxy.connectionNoProxy,
+          connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
+          connectionProxyPoolName: entry?.poolId ? entry.label : null,
+          strictProxy: resolvedProxy.strictProxy === true,
+        },
+      };
+
+      // The chat loop walks a plan entry list; one entry (or none) means there
+      // is nothing to walk, which keeps the pre-chain behaviour.
+      if (entry) {
+        credentials._poolFailover = {
+          enabled: true,
+          key: entry.key,
+          poolId: entry.poolId || null,
+          label: entry.label || null,
+          index: entry.chainIndex,
+          chainLength: entry.chainLength,
+        };
+      }
+
+      return credentials;
+    }`,
+    },
+    {
+      file: "src/sse/services/auth.js",
+      find: `    const failoverEntry = await resolveFailoverEntry(providerId, settings, options?.failoverState, model);
+    const resolvedProxy = failoverEntry
+      ? await resolveConnectionProxyConfig({ proxyPoolId: failoverEntry.poolId || "" })
+      : await resolveConnectionProxyConfig(connection.providerSpecificData || {});`,
+      replace: `    // Compat connections keep their own proxy unless the provider is in
+    // failover mode; the per-request plan then provides the chain entry.
+    const failoverEntry = options?.poolPlan?.strategy === "failover"
+      ? pickPlanEntry(options.poolPlan, options?.failoverState, model)
+      : null;
+    const resolvedProxy = failoverEntry
+      ? await resolveConnectionProxyConfig({ proxyPoolId: failoverEntry.poolId || "" })
+      : await resolveConnectionProxyConfig(connection.providerSpecificData || {});`,
+    },
+    {
+      file: "src/sse/services/auth.js",
+      find: `        connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
+        vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+        strictProxy: resolvedProxy.strictProxy === true,
+      },
+      connectionId: connection.id,
+      // Include current status for optimization check
+      testStatus: connection.testStatus,
+      lastError: connection.lastError,
+      // Pass full connection for clearAccountError to read modelLock_* keys
+      _connection: connection,
+      // Failover mode bookkeeping for the chat loop (see resolveFailoverEntry)
+      _poolFailover: failoverEntry
+        ? {
+            enabled: true,
+            key: failoverEntry.key,
+            poolId: failoverEntry.poolId || null,
+            chainLength: failoverEntry.chainLength,
+          }
+        : null,`,
+      replace: `        connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
+        connectionProxyPoolName: failoverEntry?.poolId ? failoverEntry.label : null,
+        strictProxy: resolvedProxy.strictProxy === true,
+      },
+      connectionId: connection.id,
+      // Include current status for optimization check
+      testStatus: connection.testStatus,
+      lastError: connection.lastError,
+      // Pass full connection for clearAccountError to read modelLock_* keys
+      _connection: connection,
+      // Chain bookkeeping for the chat loop (see pickPlanEntry)
+      _poolFailover: failoverEntry
+        ? {
+            enabled: true,
+            key: failoverEntry.key,
+            poolId: failoverEntry.poolId || null,
+            label: failoverEntry.label || null,
+            index: failoverEntry.chainIndex,
+            chainLength: failoverEntry.chainLength,
+          }
+        : null,`,
+    },
+    // ── chat.js: one plan per request + named log lines
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { noteProxyPoolFailure, noteProxyPoolSuccess } from "@/lib/network/connectionProxy";`,
+      replace: `import { noteProxyPoolFailure, noteProxyPoolSuccess, buildPoolPlan, getPoolName, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `  // Pool-failover state for this request: which chain entries (direct / pools)
+  // were already tried. See resolveFailoverEntry in services/auth.js.
+  const failoverState = { attempted: new Set(), bestError: null };
+  let lastError = null;
+  let lastStatus = null;
+  let lastHeaders = null;
+
+  while (true) {
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model, failoverState });`,
+      replace: `  // Pool-chain state for this request: which entries (direct / pools) were
+  // already tried. The chain itself comes from buildPoolPlan below.
+  const failoverState = { attempted: new Set(), bestError: null };
+  // One pool chain per client request: round-robin advances its start pool here
+  // (not once per retry), and the loop below walks the chain on pool-worthy
+  // failures (429 / 5xx / transport).
+  const poolPlan = await buildPoolPlan(provider);
+  let lastError = null;
+  let lastStatus = null;
+  let lastHeaders = null;
+
+  while (true) {
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model, failoverState, poolPlan });`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `    // Account selection shown in the unified "▶" line (acc:...)
+    const refreshedCredentials = await checkAndRefreshToken(provider, credentials);`,
+      check: `credPsd.connectionProxyPoolName = await getPoolName(`,
+      replace: `    // Account selection shown in the unified "▶" line (acc:...)
+    const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
+
+    // Name the pool in the request "▶" line. No-auth providers already carry
+    // the label from the plan; compat connections resolve it from their own
+    // proxyPoolId here (single cached lookup).
+    const credPsd = refreshedCredentials?.providerSpecificData;
+    if (credPsd && !credPsd.connectionProxyPoolName && credPsd.connectionProxyPoolId) {
+      credPsd.connectionProxyPoolName = await getPoolName(credPsd.connectionProxyPoolId);
+    }`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `    if (result.success) {
+      if (credentials._poolFailover) noteProxyPoolSuccess(credentials._poolFailover.key, model);
+      return result.response;
+    }`,
+      replace: `    if (result.success) {
+      const usedPool = credentials._poolFailover || null;
+      if (usedPool) noteProxyPoolSuccess(usedPool.key, model);
+      if (usedPool && usedPool.key !== DIRECT_POOL_KEY && failoverState.attempted.size > 0) {
+        log.info("POOL", \`✔ POOL:"\${usedPool.label || usedPool.key}" served the request after \${failoverState.attempted.size} failed attempt(s)\`);
+      }
+      return result.response;
+    }`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `      noteProxyPoolFailure(poolFailover.key, result.status, result.error, poolRetryAfterMs(result), model);
+      if (failoverState.attempted.size < poolFailover.chainLength) {
+        log.warn("FALLBACK", \`⇄ POOL:\${poolFailover.key} UNAVAILABLE (\${result.status}) → NEXT POOL\`);`,
+      replace: `      noteProxyPoolFailure(poolFailover.key, result.status, result.error, poolRetryAfterMs(result), model);
+      if (failoverState.attempted.size < poolFailover.chainLength) {
+        const nextEntry = (poolPlan?.chain || []).find((candidate) => !failoverState.attempted.has(candidate.key));
+        log.warn("FALLBACK", \`⇄ POOL:"\${poolFailover.label || poolFailover.key}" UNAVAILABLE (\${result.status}) → NEXT POOL\${nextEntry ? \` "\${nextEntry.label}"\` : ""}\`);`,
+    },
+    // ── chatCore: POOL label on the request line + pool name in [PROXY]
+    {
+      file: "open-sse/handlers/chatCore.js",
+      find: `import { resolveSessionId } from "../utils/sessionManager.js";`,
+      replace: `import { resolveSessionId } from "../utils/sessionManager.js";
+
+/**
+ * Pool label for the request "▶" line: a per-request chain entry carries a
+ * display name plus its position (i/N); compat connections only carry the name
+ * resolved by the chat handler. Returns null when no pool is involved.
+ */
+function poolDisplayLabel(credentials) {
+  const failover = credentials?._poolFailover;
+  if (failover?.enabled) {
+    const name = failover.label || "pool";
+    const pos = Number.isFinite(failover.index) && Number(failover.chainLength) > 1
+      ? \` (\${failover.index + 1}/\${failover.chainLength})\`
+      : "";
+    return \`\${name}\${pos}\`;
+  }
+  const name = credentials?.providerSpecificData?.connectionProxyPoolName;
+  if (name) return name;
+  if (credentials?.providerSpecificData?.connectionProxyEnabled === true) return "pool";
+  return null;
+}`,
+      check: `function poolDisplayLabel(credentials) {`,
+    },
+    {
+      file: "open-sse/handlers/chatCore.js",
+      find: `    const acc = credentials?.connectionName || credentials?.connectionId?.slice(0, 8) || "-";
+    const parts = [
+      \`POST \${clientModel} → \${provider}/\${model}\`,
+      fmtStr,
+      stream ? "STREAM" : "JSON",
+      \`\${msgN} MSG\`,
+    ];
+    if (toolN) parts.push(\`\${toolN} TOOL\`);
+    if (think) parts.push(\`THINK:\${think}\`);
+    parts.push(\`ACC:\${acc}\`);
+    log.line(reqTag, "▶", parts.join(" · "));`,
+      replace: `    const acc = credentials?.connectionName || credentials?.connectionId?.slice(0, 8) || "-";
+    const poolLabel = poolDisplayLabel(credentials);
+    const parts = [
+      \`POST \${clientModel} → \${provider}/\${model}\`,
+      fmtStr,
+      stream ? "STREAM" : "JSON",
+      \`\${msgN} MSG\`,
+    ];
+    if (toolN) parts.push(\`\${toolN} TOOL\`);
+    if (think) parts.push(\`THINK:\${think}\`);
+    if (poolLabel) parts.push(\`POOL:\${poolLabel}\`);
+    parts.push(\`ACC:\${acc}\`);
+    log.line(reqTag, "▶", parts.join(" · "));`,
+    },
+    {
+      file: "open-sse/handlers/chatCore.js",
+      find: `    const poolId = credentials?.providerSpecificData?.connectionProxyPoolId || "none";
+    const connectionName = credentials?.connectionName || credentials?.connectionId || "unknown";
+    log?.info?.("PROXY", \`\${provider.toUpperCase()} | \${model} | conn=\${connectionName} | pool=\${poolId} | url=\${maskedProxyUrl}\`);`,
+      replace: `    const poolId = credentials?.providerSpecificData?.connectionProxyPoolId || "none";
+    const poolName = credentials?.providerSpecificData?.connectionProxyPoolName;
+    const poolStr = poolName ? \`"\${poolName}" (\${String(poolId).slice(0, 8)})\` : poolId;
+    const connectionName = credentials?.connectionName || credentials?.connectionId || "unknown";
+    log?.info?.("PROXY", \`\${provider.toUpperCase()} | \${model} | conn=\${connectionName} | pool=\${poolStr} | url=\${maskedProxyUrl}\`);`,
+    },
+    // ── NoAuthProxyCard: "all active pools" option + honest hints
+    {
+      file: "src/shared/components/NoAuthProxyCard.js",
+      find: `const NONE_PROXY_POOL_VALUE = "__none__";
+const STRATEGIES = [
+  { value: "none", label: "None (single pool)" },
+  { value: "failover", label: "Failover on 429 (direct → pool)" },`,
+      replace: `const NONE_PROXY_POOL_VALUE = "__none__";
+const ALL_POOLS_VALUE = "__all__";
+const STRATEGIES = [
+  { value: "none", label: "None (single pool)" },
+  { value: "failover", label: "Failover on 429 (direct → pools)" },`,
+    },
+    {
+      file: "src/shared/components/NoAuthProxyCard.js",
+      find: `        options={[
+          { value: NONE_PROXY_POOL_VALUE, label: "None (direct)" },
+          ...proxyPools.map((pool) => ({ value: pool.id, label: pool.name })),
+        ]}
+        hint={isRotation ? "Pool selector is ignored when rotation is active — all active pools are used." : isFailover ? "Requests go direct first; this pool takes over on HTTP 429." : undefined}`,
+      replace: `        options={[
+          { value: NONE_PROXY_POOL_VALUE, label: "None (direct)" },
+          ...proxyPools.map((pool) => ({ value: pool.id, label: pool.name })),
+          { value: ALL_POOLS_VALUE, label: "All active pools (ordered)" },
+        ]}
+        hint={
+          isRotation
+            ? "Pool selector is ignored when rotation is active — all active pools are used."
+            : isFailover
+              ? proxyPoolId === ALL_POOLS_VALUE
+                ? "Requests go direct first; on HTTP 429 the same request walks every active pool in Failover-order (Proxy Pools page)."
+                : "Requests go direct first; this pool takes over on HTTP 429."
+              : undefined
+        }`,
+    },
+    {
+      file: "src/shared/components/NoAuthProxyCard.js",
+      find: `          {isFailover
+            ? \`Requests use the direct connection first. On HTTP 429 the same request is retried through the selected pool, which then rests for a short cooldown.\`
+            : !canRotate
+              ? \`Need at least 2 active proxy pools for rotation.\`
+              : isRotation
+                ? rotateStrategy === "round-robin"
+                  ? \`Rotating through all \${proxyPools.length} active pools in order. State is in-memory (resets on restart).\`
+                  : \`Picking a random pool from \${proxyPools.length} active pools each request.\`
+                : \`Uses the selected pool above. Set to Round-robin or Random to rotate across all active pools.\`}`,
+      replace: `          {isFailover
+            ? \`Requests use the direct connection first. On HTTP 429 the same request walks the pool chain (order = "Failover order" on the Proxy Pools page); each failed entry rests for a short cooldown.\`
+            : !canRotate
+              ? \`Need at least 2 active proxy pools for rotation.\`
+              : isRotation
+                ? rotateStrategy === "round-robin"
+                  ? \`Rotating across all \${proxyPools.length} active pools; the start pool alternates once per request, and a failed pool falls through to the next one. Mobile pools consume phone data quota — use Failover for daily use.\`
+                  : \`Picking a random pool from \${proxyPools.length} active pools each request; a failed pool falls through to the next one. Mobile pools consume phone data quota.\`
+                : \`Uses the selected pool above. Set to Round-robin or Random to rotate across all active pools.\`}`,
+    },
+    // ── proxy-pools API: failoverOrder rides in the JSON data column
+    {
+      file: "src/app/api/proxy-pools/route.js",
+      find: `  const type = VALID_PROXY_TYPES.includes(body?.type) ? body.type : "http";
+
+  if (!name) {
+    return { error: "Name is required" };
+  }
+
+  if (!proxyUrl) {
+    return { error: "Proxy URL is required" };
+  }
+
+  return { name, proxyUrl, noProxy, isActive, strictProxy, type };
+}`,
+      replace: `  const type = VALID_PROXY_TYPES.includes(body?.type) ? body.type : "http";
+  // Optional position in the failover chain (lower = tried first). Stored in the
+  // pool's JSON data column, so no schema migration is needed.
+  const failoverOrder = Number(body?.failoverOrder);
+
+  if (!name) {
+    return { error: "Name is required" };
+  }
+
+  if (!proxyUrl) {
+    return { error: "Proxy URL is required" };
+  }
+
+  const data = { name, proxyUrl, noProxy, isActive, strictProxy, type };
+  if (Number.isFinite(failoverOrder) && failoverOrder > 0) data.failoverOrder = Math.floor(failoverOrder);
+
+  return data;
+}`,
+    },
+    {
+      file: "src/app/api/proxy-pools/[id]/route.js",
+      find: `  if (Object.prototype.hasOwnProperty.call(body, "type")) {
+    const validTypes = ["http"];
+    updates.type = validTypes.includes(body?.type) ? body.type : "http";
+  }
+
+  return { updates };
+}`,
+      replace: `  if (Object.prototype.hasOwnProperty.call(body, "type")) {
+    const validTypes = ["http"];
+    updates.type = validTypes.includes(body?.type) ? body.type : "http";
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "failoverOrder")) {
+    const order = Number(body?.failoverOrder);
+    // 0/empty clears the position (falls back to createdAt ordering).
+    if (!Number.isFinite(order) || order <= 0) updates.failoverOrder = null;
+    else updates.failoverOrder = Math.floor(order);
+  }
+
+  return { updates };
+}`,
+    },
+    {
+      file: "src/lib/db/repos/proxyPoolsRepo.js",
+      find: `    isActive: data.isActive !== undefined ? data.isActive : true,
+    strictProxy: data.strictProxy === true,
+    testStatus: data.testStatus || "unknown",`,
+      replace: `    isActive: data.isActive !== undefined ? data.isActive : true,
+    strictProxy: data.strictProxy === true,
+    // Chain position for the failover plan (lower = tried first); unset falls
+    // back to createdAt ordering. Lives in the JSON data column.
+    failoverOrder: Number(data.failoverOrder) > 0 ? Math.floor(Number(data.failoverOrder)) : undefined,
+    testStatus: data.testStatus || "unknown",`,
+    },
+    // ── Console Log client: the routes live at /api/console-log* now
+    {
+      file: "src/app/(dashboard)/dashboard/console-log/ConsoleLogClient.js",
+      find: `      await fetch("/api/translator/console-logs", { method: "DELETE" });`,
+      replace: `      await fetch("/api/console-log", { method: "DELETE" });`,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/console-log/ConsoleLogClient.js",
+      find: `    const es = new EventSource("/api/translator/console-logs/stream");`,
+      replace: `    const es = new EventSource("/api/console-log/stream");`,
+    },
   ],
 };
 

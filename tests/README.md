@@ -31,6 +31,7 @@ deployment — on this fork that means the OpenCode Free connection).
 
 | Area | Files |
 |---|---|
+| Pool chains: ordered failover, `__all__` ordering, round-robin start/fall-through, cooldowns | `unit/proxy-pool-failover` |
 | 429 → proxy-pool failover, strict proxy, SSRF guard | `unit/proxy-pool-failover`, `unit/strict-proxy-enforcement`, `unit/ssrf-guard-hardening` |
 | Chat path: streaming, SSE→JSON, usage extraction, claude cloaking, tool dedupe, session/fingerprint | `unit/claude-*`, `unit/cached-token-usage`, `unit/extract-usage-cache-shapes`, `unit/session-manager`, `unit/opencode-*`, `unit/tool-deduper` |
 | Format translation (kept pairs) | `translator/*` + `unit/gemini-*`, `unit/openai-to-claude-*`, `unit/responses-*`, `unit/thinking-*` |

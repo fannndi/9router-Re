@@ -7,9 +7,10 @@ import Select from "./Select";
 import Badge from "./Badge";
 
 const NONE_PROXY_POOL_VALUE = "__none__";
+const ALL_POOLS_VALUE = "__all__";
 const STRATEGIES = [
   { value: "none", label: "None (single pool)" },
-  { value: "failover", label: "Failover on 429 (direct → pool)" },
+  { value: "failover", label: "Failover on 429 (direct → pools)" },
   { value: "round-robin", label: "Round-robin" },
   { value: "random", label: "Random" },
 ];
@@ -105,8 +106,17 @@ export default function NoAuthProxyCard({ providerId }) {
         options={[
           { value: NONE_PROXY_POOL_VALUE, label: "None (direct)" },
           ...proxyPools.map((pool) => ({ value: pool.id, label: pool.name })),
+          { value: ALL_POOLS_VALUE, label: "All active pools (ordered)" },
         ]}
-        hint={isRotation ? "Pool selector is ignored when rotation is active — all active pools are used." : isFailover ? "Requests go direct first; this pool takes over on HTTP 429." : undefined}
+        hint={
+          isRotation
+            ? "Pool selector is ignored when rotation is active — all active pools are used."
+            : isFailover
+              ? proxyPoolId === ALL_POOLS_VALUE
+                ? "Requests go direct first; on HTTP 429 the same request walks every active pool in Failover-order (Proxy Pools page)."
+                : "Requests go direct first; this pool takes over on HTTP 429."
+              : undefined
+        }
       />
 
       <div className="flex flex-col gap-2 mt-4">
@@ -125,13 +135,13 @@ export default function NoAuthProxyCard({ providerId }) {
         </select>
         <p className="text-xs text-text-muted">
           {isFailover
-            ? `Requests use the direct connection first. On HTTP 429 the same request is retried through the selected pool, which then rests for a short cooldown.`
+            ? `Requests use the direct connection first. On HTTP 429 the same request walks the pool chain (order = "Failover order" on the Proxy Pools page); each failed entry rests for a short cooldown.`
             : !canRotate
               ? `Need at least 2 active proxy pools for rotation.`
               : isRotation
                 ? rotateStrategy === "round-robin"
-                  ? `Rotating through all ${proxyPools.length} active pools in order. State is in-memory (resets on restart).`
-                  : `Picking a random pool from ${proxyPools.length} active pools each request.`
+                  ? `Rotating across all ${proxyPools.length} active pools; the start pool alternates once per request, and a failed pool falls through to the next one. Mobile pools consume phone data quota — use Failover for daily use.`
+                  : `Picking a random pool from ${proxyPools.length} active pools each request; a failed pool falls through to the next one. Mobile pools consume phone data quota.`
                 : `Uses the selected pool above. Set to Round-robin or Random to rotate across all active pools.`}
         </p>
       </div>

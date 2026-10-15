@@ -24,8 +24,17 @@ function normalizeFormData(data = {}) {
     noProxy: data.noProxy || "",
     isActive: data.isActive !== false,
     strictProxy: data.strictProxy === true,
+    failoverOrder: data.failoverOrder ? String(data.failoverOrder) : "",
   };
 }
+
+// "Check setup" result rendering
+const CHECK_STATUS = {
+  pass: { icon: "check_circle", color: "text-green-500" },
+  warn: { icon: "warning", color: "text-yellow-500" },
+  fail: { icon: "cancel", color: "text-red-500" },
+  info: { icon: "info", color: "text-blue-500" },
+};
 
 export default function ProxyPoolsPage() {
   const [proxyPools, setProxyPools] = useState([]);
@@ -43,6 +52,7 @@ export default function ProxyPoolsPage() {
   const [healthProgress, setHealthProgress] = useState({ current: 0, total: 0 });
   const [bulkBusy, setBulkBusy] = useState(false);
   const [confirmState, setConfirmState] = useState(null);
+  const [checkState, setCheckState] = useState({ open: false, pool: null, loading: false, result: null, error: null });
   const notify = useNotificationStore();
 
   const fetchProxyPools = useCallback(async () => {
@@ -73,6 +83,36 @@ export default function ProxyPoolsPage() {
     setShowFormModal(true);
   };
 
+  const runCheck = useCallback(async (poolId) => {
+    setCheckState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      const res = await fetch(`/api/proxy-pools/${poolId}/diagnose`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Check failed");
+      setCheckState((prev) => ({ ...prev, loading: false, result: data, error: null }));
+    } catch (error) {
+      setCheckState((prev) => ({ ...prev, loading: false, error: error.message }));
+    }
+  }, []);
+
+  const openCheckModal = (pool) => {
+    setCheckState({ open: true, pool, loading: true, result: null, error: null });
+    runCheck(pool.id);
+  };
+
+  const closeCheckModal = () => {
+    setCheckState({ open: false, pool: null, loading: false, result: null, error: null });
+  };
+
+  const copySetupCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(checkState.result?.setupCommand || "");
+      notify.success("Setup command copied");
+    } catch {
+      notify.error("Copy failed — select the text manually");
+    }
+  };
+
   const openEditModal = (proxyPool) => {
     setEditingProxyPool(proxyPool);
     setFormData(normalizeFormData(proxyPool));
@@ -91,6 +131,8 @@ export default function ProxyPoolsPage() {
       noProxy: formData.noProxy.trim(),
       isActive: formData.isActive === true,
       strictProxy: formData.strictProxy === true,
+      // Empty clears the chain position (server maps 0 to "unset").
+      failoverOrder: formData.failoverOrder === "" ? 0 : Number(formData.failoverOrder),
     };
 
     if (!payload.name || !payload.proxyUrl) return;
@@ -545,6 +587,9 @@ export default function ProxyPoolsPage() {
                     <Badge variant="default" size="sm">
                       {pool.boundConnectionCount || 0} bound
                     </Badge>
+                    {pool.failoverOrder ? (
+                      <Badge variant="default" size="sm">#{pool.failoverOrder}</Badge>
+                    ) : null}
                   </div>
                   <p className="text-xs text-text-muted truncate mt-1">{pool.proxyUrl}</p>
                   {pool.noProxy ? (
@@ -576,6 +621,13 @@ export default function ProxyPoolsPage() {
                     >
                       {testingId === pool.id ? "progress_activity" : "science"}
                     </span>
+                  </button>
+                  <button
+                    onClick={() => openCheckModal(pool)}
+                    className="p-2 rounded hover:bg-black/5 dark:hover:bg-white/5 text-text-muted hover:text-primary"
+                    title="Check setup (tether, proxy, exit IP)"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">fact_check</span>
                   </button>
                   <button
                     onClick={() => openEditModal(pool)}
@@ -653,6 +705,14 @@ export default function ProxyPoolsPage() {
             placeholder="localhost,127.0.0.1,.internal"
             hint="Comma-separated hosts/domains to bypass proxy"
           />
+          <Input
+            label="Failover order (optional)"
+            type="number"
+            value={formData.failoverOrder}
+            onChange={(e) => setFormData((prev) => ({ ...prev, failoverOrder: e.target.value }))}
+            placeholder="1"
+            hint={'Position in the failover chain when the provider uses "All active pools" — lower is tried first. Empty = newest pools last.'}
+          />
 
           <div className="flex flex-col gap-3 rounded-lg border border-border/50 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -690,6 +750,71 @@ export default function ProxyPoolsPage() {
               Cancel
             </Button>
           </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={checkState.open}
+        title={`Check setup — ${checkState.pool?.name || ""}`}
+        onClose={closeCheckModal}
+      >
+        <div className="flex flex-col gap-4">
+          {checkState.loading && (
+            <p className="text-sm text-text-muted">Running checks…</p>
+          )}
+
+          {!checkState.loading && checkState.error && (
+            <p className="text-sm text-red-500 break-words">{checkState.error}</p>
+          )}
+
+          {!checkState.loading && !checkState.error && checkState.result && (
+            <>
+              <div className="flex flex-col gap-2">
+                {checkState.result.checks.map((c) => {
+                  const meta = CHECK_STATUS[c.status] || CHECK_STATUS.info;
+                  return (
+                    <div key={c.id} className="flex items-start gap-2 rounded-lg border border-black/5 dark:border-white/10 p-2.5">
+                      <span className={`material-symbols-outlined text-[18px] ${meta.color}`}>{meta.icon}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{c.label}</p>
+                        {c.detail ? <p className="text-xs text-text-muted break-words">{c.detail}</p> : null}
+                        {c.hint && c.status !== "pass" ? (
+                          <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-0.5">{c.hint}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {checkState.result.setupCommand ? (
+                <div className="rounded-lg bg-black/5 dark:bg-white/5 p-3">
+                  <p className="text-xs text-text-muted mb-1">
+                    Mobile setup: enable USB tethering first (phone Wi-Fi OFF), then run:
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="text-xs flex-1 break-all">{checkState.result.setupCommand}</code>
+                    <Button size="sm" variant="secondary" icon="content_copy" onClick={copySetupCommand}>
+                      Copy
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
+              <p className="text-[11px] text-text-muted">
+                Checked {formatDateTime(checkState.result.checkedAt)}
+              </p>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Button icon="refresh" onClick={() => runCheck(checkState.pool.id)} disabled={checkState.loading}>
+                  Re-check
+                </Button>
+                <Button variant="ghost" onClick={closeCheckModal}>
+                  Close
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </Modal>
 

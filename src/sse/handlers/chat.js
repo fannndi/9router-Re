@@ -21,7 +21,7 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
-import { noteProxyPoolFailure, noteProxyPoolSuccess } from "@/lib/network/connectionProxy";
+import { noteProxyPoolFailure, noteProxyPoolSuccess, buildPoolPlan, getPoolName, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";
 
 /**
  * Retry-After of a failed upstream response, in milliseconds (0 when absent).
@@ -255,15 +255,19 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
-  // Pool-failover state for this request: which chain entries (direct / pools)
-  // were already tried. See resolveFailoverEntry in services/auth.js.
+  // Pool-chain state for this request: which entries (direct / pools) were
+  // already tried. The chain itself comes from buildPoolPlan below.
   const failoverState = { attempted: new Set(), bestError: null };
+  // One pool chain per client request: round-robin advances its start pool here
+  // (not once per retry), and the loop below walks the chain on pool-worthy
+  // failures (429 / 5xx / transport).
+  const poolPlan = await buildPoolPlan(provider);
   let lastError = null;
   let lastStatus = null;
   let lastHeaders = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model, failoverState });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model, failoverState, poolPlan });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -283,6 +287,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // Account selection shown in the unified "▶" line (acc:...)
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
+
+    // Name the pool in the request "▶" line. No-auth providers already carry
+    // the label from the plan; compat connections resolve it from their own
+    // proxyPoolId here (single cached lookup).
+    const credPsd = refreshedCredentials?.providerSpecificData;
+    if (credPsd && !credPsd.connectionProxyPoolName && credPsd.connectionProxyPoolId) {
+      credPsd.connectionProxyPoolName = await getPoolName(credPsd.connectionProxyPoolId);
+    }
 
     // Use shared chatCore
     const chatSettings = await getSettings();
@@ -315,7 +327,11 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     });
 
     if (result.success) {
-      if (credentials._poolFailover) noteProxyPoolSuccess(credentials._poolFailover.key, model);
+      const usedPool = credentials._poolFailover || null;
+      if (usedPool) noteProxyPoolSuccess(usedPool.key, model);
+      if (usedPool && usedPool.key !== DIRECT_POOL_KEY && failoverState.attempted.size > 0) {
+        log.info("POOL", `✔ POOL:"${usedPool.label || usedPool.key}" served the request after ${failoverState.attempted.size} failed attempt(s)`);
+      }
       return result.response;
     }
 
@@ -338,7 +354,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
       noteProxyPoolFailure(poolFailover.key, result.status, result.error, poolRetryAfterMs(result), model);
       if (failoverState.attempted.size < poolFailover.chainLength) {
-        log.warn("FALLBACK", `⇄ POOL:${poolFailover.key} UNAVAILABLE (${result.status}) → NEXT POOL`);
+        const nextEntry = (poolPlan?.chain || []).find((candidate) => !failoverState.attempted.has(candidate.key));
+        log.warn("FALLBACK", `⇄ POOL:"${poolFailover.label || poolFailover.key}" UNAVAILABLE (${result.status}) → NEXT POOL${nextEntry ? ` "${nextEntry.label}"` : ""}`);
         lastError = result.error;
         lastStatus = result.status;
         lastHeaders = upstreamResponseHeaders(result.response?.headers);

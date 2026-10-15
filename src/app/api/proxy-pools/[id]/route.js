@@ -42,6 +42,13 @@ function normalizeProxyPoolUpdate(body = {}) {
     updates.type = validTypes.includes(body?.type) ? body.type : "http";
   }
 
+  if (Object.prototype.hasOwnProperty.call(body, "failoverOrder")) {
+    const order = Number(body?.failoverOrder);
+    // 0/empty clears the position (falls back to createdAt ordering).
+    if (!Number.isFinite(order) || order <= 0) updates.failoverOrder = null;
+    else updates.failoverOrder = Math.floor(order);
+  }
+
   return { updates };
 }
 

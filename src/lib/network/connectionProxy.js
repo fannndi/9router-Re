@@ -1,4 +1,5 @@
-import { getProxyPoolById } from "@/models";
+import { getProxyPoolById, getProxyPools } from "@/models";
+import { getSettings } from "@/lib/localDb";
 import { checkFallbackError } from "open-sse/services/accountFallback.js";
 
 // Safely normalize any value into a trimmed string.
@@ -270,3 +271,98 @@ export function pickChainEntry(chain, attemptedKeys = new Set(), model = "") {
     getProxyPoolCooldownUntil(entry.key, model) < getProxyPoolCooldownUntil(best.key, model) ? entry : best
   );
 }
+
+// ─── Per-request pool chain ────────────────────────────────────────────────
+// The chat loop builds ONE plan per client request (so round-robin advances its
+// start pool exactly once per request, not once per retry) and then walks the
+// chain on pool-worthy failures. Entry shape: { key, poolId, label }.
+//
+//   failover     → [ direct, ...pools ]      pools = selected pool, or all
+//                                            active pools ordered by
+//                                            `failoverOrder` (then createdAt)
+//                                            when "__all__" is selected
+//   round-robin  → [...pools rotated to the next start index]
+//   random       → [...pools starting at a random index]
+//   none         → [ selectedPool ]          (or [] → direct)
+export const ALL_POOLS_KEY = "__all__";
+export const NONE_POOL_KEY = "__none__";
+const DIRECT_LABEL = "direct";
+const DEFAULT_FAILOVER_ORDER = 100;
+
+function poolFailoverOrder(pool) {
+  const n = Number(pool?.failoverOrder);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FAILOVER_ORDER;
+}
+
+/** Active pools with a URL, ordered for the failover chain. */
+export async function getOrderedActivePools() {
+  const pools = await getProxyPools({ isActive: true });
+  return pools
+    .filter((pool) => String(pool?.proxyUrl || "").trim())
+    .sort((a, b) => (poolFailoverOrder(a) - poolFailoverOrder(b))
+      || (new Date(a.createdAt || 0) - new Date(b.createdAt || 0)));
+}
+
+// Pool names for log lines. Short TTL so a rename shows up without a restart.
+const poolNameCache = new Map(); // id → { name, at }
+const POOL_NAME_TTL_MS = 10 * 1000;
+
+export async function getPoolName(poolId) {
+  if (!poolId) return null;
+  const hit = poolNameCache.get(poolId);
+  if (hit && Date.now() - hit.at < POOL_NAME_TTL_MS) return hit.name;
+  try {
+    const pool = await getProxyPoolById(poolId);
+    const name = pool?.name || null;
+    poolNameCache.set(poolId, { name, at: Date.now() });
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the ordered chain of pool entries a single client request may use.
+ * @returns {{ strategy: string, chain: Array<{key: string, poolId: string|null, label: string}> }}
+ */
+export async function buildPoolPlan(providerId, settings = null) {
+  const resolvedSettings = settings || await getSettings();
+  const override = (resolvedSettings?.providerStrategies || {})[providerId] || {};
+  const strategy = override.rotateStrategy || "none";
+  const selected = String(override.proxyPoolId || "").trim();
+
+  const toEntry = (pool) => ({
+    key: pool.id,
+    poolId: pool.id,
+    label: pool.name || pool.id.slice(0, 8),
+  });
+
+  let chain = [];
+
+  if (strategy === "failover") {
+    chain = [{ key: DIRECT_POOL_KEY, poolId: null, label: DIRECT_LABEL }];
+    const activePools = await getOrderedActivePools();
+    if (selected === ALL_POOLS_KEY) {
+      chain.push(...activePools.map(toEntry));
+    } else if (selected && selected !== NONE_POOL_KEY) {
+      const pool = activePools.find((p) => p.id === selected);
+      if (pool) chain.push(toEntry(pool));
+    }
+  } else if (strategy === "round-robin" || strategy === "random") {
+    const activePools = await getOrderedActivePools();
+    if (activePools.length > 0) {
+      // pickProxyPoolId advances the in-memory rotation state; calling it once
+      // per plan keeps the start pool alternating once per client request.
+      const startId = pickProxyPoolId(activePools.map((p) => p.id), strategy, providerId);
+      const idx = Math.max(0, activePools.findIndex((p) => p.id === startId));
+      chain = [...activePools.slice(idx), ...activePools.slice(0, idx)].map(toEntry);
+    }
+  } else if (selected && selected !== NONE_POOL_KEY && selected !== ALL_POOLS_KEY) {
+    const activePools = await getOrderedActivePools();
+    const pool = activePools.find((p) => p.id === selected);
+    if (pool) chain = [toEntry(pool)];
+  }
+
+  return { strategy, chain, useAllPools: selected === ALL_POOLS_KEY };
+}
+

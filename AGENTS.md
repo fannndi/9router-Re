@@ -41,9 +41,15 @@ On this machine Node is not on `PATH`: prefix commands with
   Responses, Gemini, Ollama-compat).
 - `src/app/(dashboard)/*` — dashboard pages (Endpoint & Key, Providers, Combos, Proxy Pools,
   Console Log, Settings).
-- `src/sse/handlers/chat.js` — chat entry: combo iteration + **pool failover loop**
-  (`resolveFailoverEntry`, `poolRetryAfterMs`).
-- `src/lib/network/connectionProxy.js` — pool resolution + per-model cooldowns.
+- `src/sse/handlers/chat.js` — chat entry: combo iteration + the **pool chain loop**.
+  It builds one `buildPoolPlan()` per request and walks the chain on 429/5xx/transport
+  failures (`failoverState.attempted`, `poolRetryAfterMs`).
+- `src/lib/network/connectionProxy.js` — pool resolution, ordered chains
+  (`buildPoolPlan`, `getOrderedActivePools`, `pickChainEntry`), per-pool+model cooldowns.
+- `src/app/api/proxy-pools/[id]/diagnose/route.js` — "Check setup" checklist (read-only,
+  no sudo: `ip rule`/`ip addr`, `/sys/class/net`, proxy probe, direct-vs-proxy exit IP,
+  local proxy service). `scripts/ensure-pool.mjs` upserts a pool straight into `data.sqlite`
+  (used by `mobile-pool/setup.sh`).
 - `open-sse/` — the SSE engine; see `open-sse/AGENTS.md`.
 - `open-sse/providers/registry/opencode.js` — the only provider entry.
 - `tests/` — vitest; see `tests/README.md` and `tests/translator/AGENTS.md`.
@@ -55,6 +61,10 @@ On this machine Node is not on `PATH`: prefix commands with
   incidentally.
 - `fetch` is monkey-patched in `open-sse/utils/proxyFetch.js` (pool + failover). Code that
   bypasses `fetch` bypasses the mobile-pool failover — use `fetch`.
+- Log-line contract (Console Log reads these; keep names, not UUIDs):
+  `▶ … POOL:"<pool>" (i/N)` · `[PROXY] … pool="<name>" (<id8>) | url=…` ·
+  `⇄ POOL:"<a>" UNAVAILABLE (<status>) → NEXT POOL "<b>"` ·
+  `✔ POOL:"<b>" served the request after N failed attempt(s)`.
 - Docs are English. Keep `LEAN.md` in sync when a phase changes.
 - After any engine change run: `audit` → `verify all` → `npm run build` → `vitest` → restart
   the service → smoke test `/v1/models` and a combo chat.

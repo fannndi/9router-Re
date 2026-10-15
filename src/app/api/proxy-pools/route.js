@@ -16,6 +16,9 @@ function normalizeProxyPoolInput(body = {}) {
   const isActive = body?.isActive === undefined ? true : body.isActive === true;
   const strictProxy = body?.strictProxy === true;
   const type = VALID_PROXY_TYPES.includes(body?.type) ? body.type : "http";
+  // Optional position in the failover chain (lower = tried first). Stored in the
+  // pool's JSON data column, so no schema migration is needed.
+  const failoverOrder = Number(body?.failoverOrder);
 
   if (!name) {
     return { error: "Name is required" };
@@ -25,7 +28,10 @@ function normalizeProxyPoolInput(body = {}) {
     return { error: "Proxy URL is required" };
   }
 
-  return { name, proxyUrl, noProxy, isActive, strictProxy, type };
+  const data = { name, proxyUrl, noProxy, isActive, strictProxy, type };
+  if (Number.isFinite(failoverOrder) && failoverOrder > 0) data.failoverOrder = Math.floor(failoverOrder);
+
+  return data;
 }
 
 function buildUsageMap(connections = []) {

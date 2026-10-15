@@ -16,7 +16,7 @@ node scripts/lean.mjs audit             # fails when a rule can never apply (che
 ```
 
 Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-saver`,
-`sso`, `mitm-tunnel`, `providers`, `cosmetics`, `sweep`.
+`sso`, `mitm-tunnel`, `providers`, `cosmetics`, `sweep`, `pool-obs`.
 
 ## What the fork keeps
 
@@ -28,7 +28,9 @@ Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-s
 | Proxy Pools dashboard + API | `/dashboard/proxy-pools`, `/api/proxy-pools/*` |
 | Combos (round-robin / fallback / fusion) + **vision adapter only** | `open-sse/services/combo.js`, `open-sse/services/capacityAdapter.js` |
 | API keys, provider connections, dashboard password login | `/dashboard/endpoint`, `/api/keys`, `/api/providers` |
-| Console Log (live server output for debugging) | `/dashboard/console-log` |
+| Console Log (live server output, **with per-request pool attribution**) | `/dashboard/console-log`, `/api/console-log*` |
+| Pool chains: `direct → pools` failover (ordered) or round-robin, per-pool+model cooldowns, in-request walk on 429/5xx | `src/lib/network/connectionProxy.js` (`buildPoolPlan`), `src/sse/handlers/chat.js` |
+| "Check setup" diagnostics for a pool (tether, policy route, proxy, exit IP, service) | `/dashboard/proxy-pools` → row button, `/api/proxy-pools/[id]/diagnose` |
 | Client-format translation that can actually occur: `openai`, `claude`, `gemini`, `openai-responses`, Ollama-compat (`/v1/api/chat`) | `open-sse/translator/` |
 
 Also kept but inert until used: provider-nodes (custom OpenAI-compatible endpoints), model
@@ -61,6 +63,21 @@ aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog sync.
 | i18n layer | `src/i18n/*`, `public/i18n/*`, `/api/locale`, `HeaderLanguage`, `LanguageSwitcher`, `constants/locales.js`, profile-page language card, `translate()` call sites (English literals inline) — dashboard is English-only |
 | Dependencies | `chalk`, `enquirer`, `express`, `node-forge`, `ora`, `react-is`, `socks-proxy-agent`, optional `@aws-sdk/credential-providers` → 15 deps + `better-sqlite3` optional |
 | Tests | every suite that covered the removed surface (~28 files) + stale `tests/__baseline__/` snapshots |
+
+### The `pool-obs` phase (2-pool chains + observability)
+
+| Feature | Detail |
+|---|---|
+| Console Log works again | routes restored at `/api/console-log` + `/api/console-log/stream` (the cosmetics phase deleted the old `/api/translator/console-logs` tree; the page kept calling it → 404). Client paths patched. |
+| Pool names in the logs | `▶ POST … · POOL:"Mobile (phone tether)" (2/3) · ACC:Public` per attempt, `[PROXY] … pool="Local (host)" (727afab5) | url=…`, `⇄ POOL:"direct" UNAVAILABLE (429) → NEXT POOL "Local (host)"`, and `✔ POOL:"…" served the request after N failed attempt(s)` |
+| One chain per request | `buildPoolPlan(provider)` runs once per client request in `src/sse/handlers/chat.js`, then the loop walks the chain. Failover = `[direct, …pools]`; round-robin/random = pools with the start rotated **once per request**; a failed pool falls through to the next entry in the same request (bounded — no loop). |
+| Ordered chains | Provider strategy `proxyPoolId: "__all__"` ("All active pools (ordered)" in the card) makes the failover chain include every active pool sorted by `failoverOrder` (default 100), then `createdAt`. |
+| `failoverOrder` field | Proxy Pools add/edit form + `#n` badge; stored in the pool's JSON `data` column → **no DB migration**. |
+| Check setup | `/api/proxy-pools/[id]/diagnose` (read-only, **no sudo**): pool active → proxy reachable → **exit IP direct vs via proxy** → (mobile pool) tether iface, `ip rule` table 100, phone gateway, local proxy service. UI shows a checklist + a copy button for the setup command. |
+| Self-registering mobile pool | `scripts/ensure-pool.mjs --name … --url … --order … [--strict]` upserts the pool straight into `data.sqlite`; `mobile-pool/setup.sh` calls it after re-applying the tether config, so nothing is pasted by hand. |
+
+`pool-obs` also made `apply all` idempotent on an already-stripped tree: a patch whose target
+was deleted by another phase is now skipped instead of raising "patch target missing".
 
 **Overlays.** Ten files are deliberate fork rewrites rather than edits, so they live in
 full under `scripts/lean/overlays/` and the phase copies them over verbatim:
@@ -115,6 +132,11 @@ file to `scripts/lean/overlays/` if the fork owns it outright. Re-run `verify`/`
 - `npm run build` → compiles, static pages generated.
 - `(cd tests && npx vitest run)` → all green (~760 tests; `real/` suites skip without `RUN_REAL=1`).
 - `curl -s localhost:20128/v1/models` → the combo + `oc/*` models only.
+- Pool attribution: send one chat, then check Console Log for `POOL:"…"` on the request line
+  and `[PROXY] … pool="…"` (round-robin alternates the start pool per request; failover walks
+  `direct → pools` on 429).
+- Check setup: Proxy Pools → row button → every check green (mobile) / exit-IP warn is expected
+  for `Local (host)`.
 - Chat smoke through the combo:
   `curl -s -X POST localhost:20128/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{"model":"free-autopilot","messages":[{"role":"user","content":"hi"}],"stream":false}'`
 - 429 failover: `~/Gateway/mobile-pool/e2e-local.sh` (mock 429 → pool retry).

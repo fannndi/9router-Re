@@ -16,19 +16,39 @@
 // open-sse/config/errorConfig.js underneath.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/models", () => ({
+const modelsMock = vi.hoisted(() => ({
   getProxyPoolById: vi.fn(),
+  getProxyPools: vi.fn(async () => []),
+}));
+
+vi.mock("@/models", () => modelsMock);
+vi.mock("@/lib/localDb", () => ({
+  getSettings: vi.fn(async () => ({ providerStrategies: {} })),
 }));
 
 const {
   DIRECT_POOL_KEY,
+  ALL_POOLS_KEY,
   isProxyPoolCoolingDown,
   getProxyPoolCooldownUntil,
   noteProxyPoolFailure,
   noteProxyPoolSuccess,
   pickChainEntry,
   resetProxyPoolHealth,
+  buildPoolPlan,
+  getOrderedActivePools,
 } = await import("../../src/lib/network/connectionProxy.js");
+
+const { getSettings } = await import("../../src/lib/localDb");
+
+const pool = (id, name, failoverOrder, createdAt = "2026-01-01T00:00:00.000Z") => ({
+  id,
+  name,
+  proxyUrl: `http://${id}.local:8899`,
+  isActive: true,
+  failoverOrder,
+  createdAt,
+});
 
 const POOL_KEY = "pool-mobile";
 
@@ -148,5 +168,71 @@ describe("noteProxyPoolSuccess", () => {
     noteProxyPoolFailure(DIRECT_POOL_KEY, 429, "rate limit exceeded");
     noteProxyPoolSuccess(DIRECT_POOL_KEY);
     expect(pickChainEntry(chain(), new Set()).key).toBe(DIRECT_POOL_KEY);
+  });
+});
+
+describe("buildPoolPlan", () => {
+  const settingsFor = (override, providerId = "plan-provider") => ({
+    providerStrategies: { [providerId]: override },
+  });
+
+  beforeEach(() => {
+    modelsMock.getProxyPools.mockResolvedValue([
+      pool("pool-mobile", "Mobile (phone tether)", 2),
+      pool("pool-local", "Local (host)", 1),
+    ]);
+  });
+
+  it("puts direct first and walks every active pool in failover order", async () => {
+    getSettings.mockResolvedValue(settingsFor({ rotateStrategy: "failover", proxyPoolId: ALL_POOLS_KEY }));
+    const plan = await buildPoolPlan("plan-provider");
+    expect(plan.chain.map((e) => e.key)).toEqual([DIRECT_POOL_KEY, "pool-local", "pool-mobile"]);
+    expect(plan.chain[1].label).toBe("Local (host)");
+  });
+
+  it("keeps the single selected pool behaviour", async () => {
+    getSettings.mockResolvedValue(settingsFor({ rotateStrategy: "failover", proxyPoolId: "pool-mobile" }));
+    const plan = await buildPoolPlan("plan-provider");
+    expect(plan.chain.map((e) => e.key)).toEqual([DIRECT_POOL_KEY, "pool-mobile"]);
+  });
+
+  it("ignores a selected pool that is not active", async () => {
+    getSettings.mockResolvedValue(settingsFor({ rotateStrategy: "failover", proxyPoolId: "pool-missing" }));
+    const plan = await buildPoolPlan("plan-provider");
+    expect(plan.chain.map((e) => e.key)).toEqual([DIRECT_POOL_KEY]);
+  });
+
+  it("rotates the round-robin start pool once per plan (not per retry)", async () => {
+    getSettings.mockResolvedValue(settingsFor({ rotateStrategy: "round-robin" }, "rr-provider"));
+    const first = await buildPoolPlan("rr-provider");
+    const second = await buildPoolPlan("rr-provider");
+    expect(first.chain).toHaveLength(2);
+    expect(second.chain).toHaveLength(2);
+    expect(second.chain[0].key).not.toBe(first.chain[0].key);
+    // The chain still contains every pool exactly once
+    expect(new Set(second.chain.map((e) => e.key)).size).toBe(2);
+  });
+
+  it("returns an empty chain for strategy none without a pool", async () => {
+    getSettings.mockResolvedValue(settingsFor({ rotateStrategy: "none" }));
+    const plan = await buildPoolPlan("none-provider");
+    expect(plan.chain).toEqual([]);
+  });
+
+  it("keeps a single pinned pool for strategy none", async () => {
+    getSettings.mockResolvedValue(settingsFor({ rotateStrategy: "none", proxyPoolId: "pool-local" }, "none-pinned-provider"));
+    const plan = await buildPoolPlan("none-pinned-provider");
+    expect(plan.chain.map((e) => e.key)).toEqual(["pool-local"]);
+  });
+
+  it("orders active pools by failoverOrder then createdAt", async () => {
+    modelsMock.getProxyPools.mockResolvedValue([
+      pool("c", "C", 2, "2026-01-02T00:00:00.000Z"),
+      pool("a", "A", undefined, "2026-01-03T00:00:00.000Z"),
+      pool("b", "B", 1, "2026-01-01T00:00:00.000Z"),
+      pool("d", "D", 1, "2026-01-04T00:00:00.000Z"),
+    ]);
+    const ordered = await getOrderedActivePools();
+    expect(ordered.map((p) => p.id)).toEqual(["b", "d", "c", "a"]);
   });
 });

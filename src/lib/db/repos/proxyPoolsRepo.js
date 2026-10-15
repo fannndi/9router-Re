@@ -67,6 +67,9 @@ export async function createProxyPool(data) {
     type: data.type || "http",
     isActive: data.isActive !== undefined ? data.isActive : true,
     strictProxy: data.strictProxy === true,
+    // Chain position for the failover plan (lower = tried first); unset falls
+    // back to createdAt ordering. Lives in the JSON data column.
+    failoverOrder: Number(data.failoverOrder) > 0 ? Math.floor(Number(data.failoverOrder)) : undefined,
     testStatus: data.testStatus || "unknown",
     lastTestedAt: data.lastTestedAt || null,
     lastError: data.lastError || null,

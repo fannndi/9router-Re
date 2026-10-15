@@ -28,6 +28,26 @@ import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translato
 import { resolveSessionId } from "../utils/sessionManager.js";
 
 /**
+ * Pool label for the request "▶" line: a per-request chain entry carries a
+ * display name plus its position (i/N); compat connections only carry the name
+ * resolved by the chat handler. Returns null when no pool is involved.
+ */
+function poolDisplayLabel(credentials) {
+  const failover = credentials?._poolFailover;
+  if (failover?.enabled) {
+    const name = failover.label || "pool";
+    const pos = Number.isFinite(failover.index) && Number(failover.chainLength) > 1
+      ? ` (${failover.index + 1}/${failover.chainLength})`
+      : "";
+    return `${name}${pos}`;
+  }
+  const name = credentials?.providerSpecificData?.connectionProxyPoolName;
+  if (name) return name;
+  if (credentials?.providerSpecificData?.connectionProxyEnabled === true) return "pool";
+  return null;
+}
+
+/**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
  * @param {object} options.modelInfo - { provider, model }
@@ -229,6 +249,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     const showThinking = true;
     const think = showThinking ? log.fmtThink?.(extractThinking(translatedBody)) : null;
     const acc = credentials?.connectionName || credentials?.connectionId?.slice(0, 8) || "-";
+    const poolLabel = poolDisplayLabel(credentials);
     const parts = [
       `POST ${clientModel} → ${provider}/${model}`,
       fmtStr,
@@ -237,6 +258,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     ];
     if (toolN) parts.push(`${toolN} TOOL`);
     if (think) parts.push(`THINK:${think}`);
+    if (poolLabel) parts.push(`POOL:${poolLabel}`);
     parts.push(`ACC:${acc}`);
     log.line(reqTag, "▶", parts.join(" · "));
   }
@@ -305,8 +327,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }
 
     const poolId = credentials?.providerSpecificData?.connectionProxyPoolId || "none";
+    const poolName = credentials?.providerSpecificData?.connectionProxyPoolName;
+    const poolStr = poolName ? `"${poolName}" (${String(poolId).slice(0, 8)})` : poolId;
     const connectionName = credentials?.connectionName || credentials?.connectionId || "unknown";
-    log?.info?.("PROXY", `${provider.toUpperCase()} | ${model} | conn=${connectionName} | pool=${poolId} | url=${maskedProxyUrl}`);
+    log?.info?.("PROXY", `${provider.toUpperCase()} | ${model} | conn=${connectionName} | pool=${poolStr} | url=${maskedProxyUrl}`);
   }
 
   if (proxyOptions.connectionProxyEnabled && proxyOptions.connectionNoProxy) {

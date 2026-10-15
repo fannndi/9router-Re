@@ -117,8 +117,9 @@ models); the individual `oc/*` models are also listed.
 | **Endpoint & Key** | the API base URL + key management (`require API key`, restrictions) |
 | **Providers** | OpenCode Free status + custom OpenAI/Anthropic-compatible endpoints |
 | **Combos** | `free-autopilot` membership, strategy (fallback / round-robin / fusion) and the vision adapter |
-| **Proxy Pools** | pool entries (this machine: `Mobile (phone tether)` → `127.0.0.1:8888`) |
-| **Console Log** | live server output, for debugging upstream errors |
+| **Provider strategy** (Providers → OpenCode Free) | `Failover on 429` (direct → pools, walks the ordered chain) or `Round-robin`/`Random` (start pool alternates per request, a failed pool falls through to the next). Mobile pools consume phone quota — round-robin is a demo mode; keep failover for daily use. |
+| **Proxy Pools** | pool entries with a **Failover order** (`Local (host)` → `127.0.0.1:8899`, `Mobile (phone tether)` → `127.0.0.1:8888`), plus the row **Check setup** button that verifies tether / policy route / proxy / exit IP without sudo |
+| **Console Log** | live server output with per-request pool attribution: `▶ … POOL:"Mobile (phone tether)" (2/2)`, `[PROXY] … pool="…" | url=…`, `⇄ POOL:"direct" UNAVAILABLE (429) → NEXT POOL "…"` |
 | **Settings** | password/login, routing strategy, outbound proxy, observability toggle, backup |
 
 ## Environment
