@@ -64,6 +64,18 @@ function applyPatch(rule, { dry = false } = {}) {
     return "applied";
   }
 
+  if (rule.cutTo) {
+    const start = src.indexOf(rule.find ?? "");
+    // Start marker gone → an earlier run already cut the range (idempotent).
+    if (start === -1) return "skip";
+    const end = src.indexOf(rule.cutTo, start);
+    if (end === -1) {
+      throw new Error(`cutTo end marker not found after start in ${rule.file}: ${JSON.stringify(rule.cutTo)}`);
+    }
+    if (!dry) fs.writeFileSync(abs, src.slice(0, start) + src.slice(end));
+    return "applied";
+  }
+
   if (rule.cutFrom) {
     const idx = src.indexOf(rule.cutFrom);
     // Marker gone → an earlier run cut the tail already (idempotent).
@@ -1589,6 +1601,321 @@ import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
       icon: "savings",
       breadcrumbs: [],
     };
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+    ],
+  },
+
+  // 6 ── SSO (OIDC + SAML): the fork is a single-user local gateway with a
+  // password; enterprise SSO only added a login bypass surface and a heavy
+  // @node-saml dependency. Password login stays.
+  sso: {
+    title: "drop OIDC/SAML sign-in (password-only dashboard login)",
+    delete: [
+      "src/app/api/auth/oidc",
+      "src/app/api/auth/saml",
+      "src/lib/auth/oidc.js",
+      "src/lib/auth/saml.js",
+    ],
+    deps: { remove: ["@node-saml/node-saml"] },
+    patch: [
+      {
+        file: "src/app/api/auth/login/route.js",
+        find: `import { isOidcConfigured } from "@/lib/auth/oidc";
+import { isSamlConfigured } from "@/lib/auth/saml.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/auth/login/route.js",
+        find: `    if (settings.authMode === "sso" || settings.authMode === "saml" || settings.authMode === "oidc") {
+      const ssoType = settings.ssoType || (settings.authMode === "saml" ? "saml" : "oidc");
+      if (ssoType === "saml" && isSamlConfigured(settings)) {
+        return NextResponse.json({ error: "Password login is disabled. Use SAML SSO sign in." }, { status: 403 });
+      }
+      if (ssoType === "oidc" && isOidcConfigured(settings)) {
+        return NextResponse.json({ error: "Password login is disabled. Use OIDC sign in." }, { status: 403 });
+      }
+    }
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/auth/status/route.js",
+        writeFile: `import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { getSettings } from "@/lib/localDb";
+import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
+
+// Password-only dashboard auth (OIDC/SAML were removed in this fork).
+export async function GET() {
+  try {
+    const settings = await getSettings();
+    const cookieStore = await cookies();
+    const session = await getDashboardAuthSession(cookieStore.get("auth_token")?.value);
+    return NextResponse.json({
+      requireLogin: settings.requireLogin !== false,
+      authMode: "password",
+      hasPassword: !!settings.password,
+      authenticated: !!session,
+    });
+  } catch {
+    return NextResponse.json({
+      requireLogin: true,
+      authMode: "password",
+      hasPassword: false,
+      authenticated: false,
+    });
+  }
+}
+`,
+        check: "Password-only dashboard auth",
+      },
+      {
+        file: "src/app/api/settings/route.js",
+        find: `const { password, oidcClientSecret, ...safeSettings } = settings;
+    safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);`,
+        replace: `const { password, ...safeSettings } = settings;`,
+        allowMultiple: true,
+        check: `const { password, ...safeSettings } = settings;`,
+      },
+      {
+        file: "src/app/api/settings/route.js",
+        find: `    if (Object.prototype.hasOwnProperty.call(body, "oidcClientSecret")) {
+      if (!body.oidcClientSecret || !String(body.oidcClientSecret).trim()) {
+        delete body.oidcClientSecret;
+      }
+    }
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/dashboardGuard.js",
+        find: `  "/api/auth/oidc",
+  "/api/auth/saml",
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/login/page.js",
+        find: `  const [authMode, setAuthMode] = useState("password");
+  const [ssoType, setSsoType] = useState("oidc");
+  const [oidcConfigured, setOidcConfigured] = useState(false);
+  const [oidcLoginLabel, setOidcLoginLabel] = useState("Sign in with OIDC");
+  const [samlConfigured, setSamlConfigured] = useState(false);
+  const [samlLoginLabel, setSamlLoginLabel] = useState("Sign in with SAML SSO");
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/login/page.js",
+        find: `          setHasPassword(!!data.hasPassword);
+          setAuthMode(data.authMode || "password");
+          setSsoType(data.ssoType || "oidc");
+          setOidcConfigured(data.oidcConfigured === true);
+          setOidcLoginLabel(data.oidcLoginLabel || "Sign in with OIDC");
+          setSamlConfigured(data.samlConfigured === true);
+          setSamlLoginLabel(data.samlLoginLabel || "Sign in with SAML SSO");`,
+        replace: `          setHasPassword(!!data.hasPassword);`,
+        check: `setHasPassword(!!data.hasPassword);`,
+      },
+      {
+        file: "src/app/login/page.js",
+        find: `  const handleOidcLogin = () => {
+    window.location.href = "/api/auth/oidc/start";
+  };
+
+  const handleSamlLogin = () => {
+    window.location.href = "/api/auth/saml/start";
+  };
+
+  const isSsoEnabled = ["sso", "oidc", "saml", "both"].includes(authMode);
+  const activeSsoType = ssoType || (authMode === "saml" ? "saml" : "oidc");
+
+  const samlAvailable = isSsoEnabled && activeSsoType === "saml" && samlConfigured;
+  const oidcAvailable = isSsoEnabled && activeSsoType === "oidc" && oidcConfigured;
+  const ssoAvailable = samlAvailable || oidcAvailable;
+
+  const passwordAvailable = authMode === "password" || authMode === "both" || !ssoAvailable;
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/login/page.js",
+        find: `          <p className="text-text-muted">
+            {samlAvailable
+              ? "Sign in with SAML 2.0 Single Sign-On"
+              : oidcAvailable
+              ? "Sign in with your OIDC provider to access the dashboard"
+              : "Enter your password to access the dashboard"}
+          </p>`,
+        replace: `          <p className="text-text-muted">Enter your password to access the dashboard</p>`,
+        check: `Enter your password to access the dashboard</p>`,
+      },
+      {
+        file: "src/app/login/page.js",
+        find: `            {samlAvailable && (
+              <Button type="button" variant="primary" className="w-full" onClick={handleSamlLogin}>
+                {samlLoginLabel}
+              </Button>
+            )}
+
+            {oidcAvailable && (
+              <Button type="button" variant="primary" className="w-full" onClick={handleOidcLogin}>
+                {oidcLoginLabel}
+              </Button>
+            )}
+
+            {ssoAvailable && passwordAvailable && <div className="h-px bg-border/60" />}
+
+            {passwordAvailable ? (
+              <form onSubmit={handleLogin} className="flex flex-col gap-4">
+                {isSsoEnabled && !ssoAvailable && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
+                    {activeSsoType === "saml" ? "SAML SSO" : "OIDC"} login is enabled, but configuration is incomplete. Password login is still available for recovery.
+                  </p>
+                )}
+
+                {authMode === "both" && ssoAvailable && (
+                  <p className="text-xs text-text-muted text-center">
+                    Password and {activeSsoType === "saml" ? "SAML SSO" : "OIDC"} login are both enabled.
+                  </p>
+                )}
+`,
+        replace: `            <form onSubmit={handleLogin} className="flex flex-col gap-4">
+`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/login/page.js",
+        find: `              </form>
+            ) : (
+              error && <p className="text-xs text-red-500">{error}</p>
+            )}
+`,
+        replace: `              </form>
+`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/login/page.js",
+        find: `                    autoFocus={!oidcAvailable}
+`,
+        replace: `                    autoFocus
+`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/profile/page.js",
+        find: `  const [oidcForm, setOidcForm] = useState({`,
+        cutTo: `  const importFileRef = useRef(null);`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/profile/page.js",
+        find: `        setSettings(data);
+        setOidcForm({
+          authMode: data?.authMode || "password",
+          oidcIssuerUrl: data?.oidcIssuerUrl || "",
+          oidcClientId: data?.oidcClientId || "",
+          oidcScopes: data?.oidcScopes || "openid profile email",
+          oidcLoginLabel: data?.oidcLoginLabel || "Sign in with OIDC",
+        });
+        setOidcClientSecret("");
+        setSsoTypeTab(data?.ssoType || "saml");
+        setSamlForm({
+          samlEntryPoint: data?.samlEntryPoint || "",
+          samlIssuer: data?.samlIssuer || "urn:9router:sp",
+          samlCert: data?.samlCert || "",
+          samlLoginLabel: data?.samlLoginLabel || "Sign in with SAML SSO",
+          samlAttributeEmail: data?.samlAttributeEmail || "email",
+          samlAttributeName: data?.samlAttributeName || "name",
+        });
+        if (
+          data?.authMode === "sso" ||
+          data?.authMode === "saml" ||
+          data?.authMode === "oidc" ||
+          data?.authMode === "both"
+        ) {
+          setOidcExpanded(true);
+        }`,
+        replace: `        setSettings(data);`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/profile/page.js",
+        find: `  const updateOidcForm = (field, value) => {`,
+        cutTo: `  const updateObservabilityEnabled = async (enabled) => {`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/profile/page.js",
+        find: `        {/* Single Sign-On (SSO) */}`,
+        cutTo: `        {/* Routing Preferences */}`,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  const [displayName, setDisplayName] = useState("");
+  const [loginMethod, setLoginMethod] = useState("");
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAuthStatus() {
+      try {
+        const res = await fetch("/api/auth/status", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) {
+          setDisplayName(data?.displayName || data?.samlName || data?.samlEmail || data?.oidcName || data?.oidcEmail || "");
+          setLoginMethod(data?.loginMethod || "");
+        }
+      } catch {
+        if (!cancelled) {
+          setDisplayName("");
+          setLoginMethod("");
+        }
+      }
+    }
+
+    loadAuthStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `        {displayName && (loginMethod === "OIDC" || loginMethod === "SAML") && (
+          <div
+            className="hidden sm:flex items-center max-w-[220px] px-3 py-1.5 rounded-full border border-border bg-surface/70 text-xs text-text-muted truncate"
+            title={displayName}
+          >
+            <span className="material-symbols-outlined text-[14px] mr-1.5 text-primary">person</span>
+            <span className="truncate">{displayName}</span>
+            <span className="ml-2 shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
+              {loginMethod}
+            </span>
+          </div>
+        )}
 `,
         replace: "",
         checkAbsent: true,
