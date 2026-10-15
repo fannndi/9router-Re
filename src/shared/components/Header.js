@@ -120,13 +120,6 @@ const getPageInfo = (pathname) => {
       icon: "savings",
       breadcrumbs: [],
     };
-  if (pathname.includes("/cli-tools"))
-    return {
-      title: "CLI Tools",
-      description: "Configure CLI tools",
-      icon: "terminal",
-      breadcrumbs: [],
-    };
   if (pathname.includes("/proxy-pools"))
     return {
       title: "Proxy Pools",

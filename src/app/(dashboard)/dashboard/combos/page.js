@@ -62,7 +62,6 @@ export default function CombosPage() {
   const [capacityAdapter, setCapacityAdapter] = useState(EMPTY_CAPACITY_ADAPTER);
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);
-  const [presetLoading, setPresetLoading] = useState(null); // "cursor" | "claude" | null
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const { copied, copy } = useCopyToClipboard();
@@ -92,66 +91,6 @@ export default function CombosPage() {
   };
 
   const clearSelection = () => setSelectedIds([]);
-
-  const handleGeneratePresets = async (source) => {
-    const label = source === "cursor" ? "Cursor Default" : "Claude Default";
-    setPresetLoading(source);
-    try {
-      const previewRes = await fetch(`/api/combos/presets?source=${source}`);
-      const preview = await previewRes.json();
-      if (!previewRes.ok) {
-        alert(preview.error || `Failed to preview ${label}`);
-        return;
-      }
-
-      const toCreate = preview.toCreate ?? (preview.items || []).filter((i) => !i.exists).length;
-      const toSkip = preview.toSkip ?? (preview.items || []).filter((i) => i.exists).length;
-      const total = (preview.items || []).length;
-
-      if (total === 0) {
-        alert(`No ${label} models available to generate.`);
-        return;
-      }
-
-      if (toCreate === 0) {
-        alert(`All ${total} ${label} combos already exist. Nothing to create.`);
-        return;
-      }
-
-      setConfirmState({
-        title: `Generate ${label}`,
-        message: `Create ${toCreate} combo${toCreate === 1 ? "" : "s"} named like ${source === "cursor" ? "Cursor" : "Claude"} model IDs (seeded with cu/… or cc/…). ${toSkip} already exist and will be skipped. You can edit any combo afterward to add fallbacks.`,
-        confirmText: "Generate",
-        variant: "primary",
-        onConfirm: async () => {
-          setConfirmState((prev) => prev ? { ...prev, loading: true } : null);
-          try {
-            const res = await fetch("/api/combos/presets", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ source }),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-              alert(data.error || `Failed to generate ${label}`);
-              return;
-            }
-            await fetchData();
-            setConfirmState(null);
-          } catch (error) {
-            console.log(`Error generating ${label}:`, error);
-            alert(`Failed to generate ${label}`);
-            setConfirmState((prev) => prev ? { ...prev, loading: false } : null);
-          }
-        },
-      });
-    } catch (error) {
-      console.log(`Error previewing ${label}:`, error);
-      alert(`Failed to preview ${label}`);
-    } finally {
-      setPresetLoading(null);
-    }
-  };
 
   const fetchData = async () => {
     try {
@@ -373,39 +312,11 @@ export default function CombosPage() {
             <li><span className="font-medium text-text-main">Round Robin</span> — rotates models across requests to spread load</li>
             <li><span className="font-medium text-text-main">Fusion</span> — queries all models in parallel, then a judge synthesizes one answer. Best quality, but costs the most: every request bills all panel models + the judge (N+1 calls)</li>
           </ul>
-          <p className="hidden text-xs text-text-muted mt-3 max-w-2xl">
-            <span className="font-medium text-text-main">Cursor / Claude Default</span> create combos named exactly like those clients&apos; model IDs (e.g. <code className="font-mono">composer-2.5</code>, <code className="font-mono">opus</code>), seeded with the matching <code className="font-mono">cu/…</code> or <code className="font-mono">cc/…</code> route so traffic can hit 9router without the prefix.
-            {" "}Note: Cursor IDE itself often blocks built-in Composer / Grok from Override OpenAI Base URL (&quot;model does not support custom API&quot;); add them via Cursor&apos;s <span className="font-medium text-text-main">Add Custom Model</span> using the combo name, or pick a model Cursor allows through the custom endpoint.
-          </p>
         </div>
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-stretch">
           <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto whitespace-nowrap">
             Create Combo
           </Button>
-          <div className="hidden">
-            <Button
-              variant="secondary"
-              size="sm"
-              icon="edit_note"
-              loading={presetLoading === "cursor"}
-              disabled={!!presetLoading}
-              onClick={() => handleGeneratePresets("cursor")}
-              className="w-full whitespace-nowrap"
-            >
-              Cursor Default
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              icon="smart_toy"
-              loading={presetLoading === "claude"}
-              disabled={!!presetLoading}
-              onClick={() => handleGeneratePresets("claude")}
-              className="w-full whitespace-nowrap"
-            >
-              Claude Default
-            </Button>
-          </div>
         </div>
       </div>
 
@@ -539,7 +450,7 @@ export default function CombosPage() {
         />
       )}
 
-      {/* Confirm (delete / generate presets) */}
+      {/* Confirm delete */}
       <ConfirmModal
         isOpen={!!confirmState}
         onClose={() => !confirmState?.loading && setConfirmState(null)}

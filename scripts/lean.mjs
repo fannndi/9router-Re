@@ -58,6 +58,12 @@ function applyPatch(rule, { dry = false } = {}) {
   }
   let src = fs.readFileSync(abs, "utf8");
 
+  if (rule.writeFile !== undefined) {
+    if (rule.check && src.includes(rule.check)) return "skip";
+    if (!dry) fs.writeFileSync(abs, rule.writeFile);
+    return "applied";
+  }
+
   if (rule.cutFrom) {
     const idx = src.indexOf(rule.cutFrom);
     // Marker gone → an earlier run cut the tail already (idempotent).
@@ -640,6 +646,7 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";`,
     delete: [
       "src/app/api/cli-tools",
       "src/app/(dashboard)/dashboard/cli-tools",
+      "src/app/(dashboard)/dashboard/mitm",
       "src/app/api/mcp",
       "src/lib/mcp",
       "src/shared/constants/cliTools.js",
@@ -689,6 +696,20 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";`,
       {
         file: "src/shared/components/index.js",
         find: `export { default as McpMarketplaceModal } from "./McpMarketplaceModal";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/services/initializeApp.js",
+        find: `import { killAllBridges } from "@/lib/mcp/stdioSseBridge";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/services/initializeApp.js",
+        find: `        try { killAllBridges(); } catch { /* best effort */ }
 `,
         replace: "",
         checkAbsent: true,
@@ -1054,6 +1075,202 @@ const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "trave
   vision: { ...EMPTY_CAP_ENTRY },
 };`,
         check: `const EMPTY_CAPACITY_ADAPTER = {`,
+      },
+    ],
+  },
+
+  // 4 ── Usage & Quota: request/usage history, statistics, quota tracker and
+  // the quota auto-ping scheduler. The fork keeps the "📊 DONE" log line (it
+  // comes from formatDoneLine, no DB) but drops every write and every page.
+  // The hot chat path is decoupled with a no-op stub instead of edits at ~20
+  // call sites.
+  "usage-quota": {
+    title: "drop usage tracking + quota tracker + auto-ping (stub the chat-path hooks)",
+    delete: [
+      "src/app/(dashboard)/dashboard/usage",
+      "src/app/(dashboard)/dashboard/quota",
+      "src/app/api/usage",
+      "src/lib/requestDetailsDb.js",
+      "src/lib/db/repos/usageRepo.js",
+      "src/lib/db/repos/requestDetailsRepo.js",
+      "open-sse/services/usage",
+      "open-sse/services/usage.js",
+      "open-sse/services/minimaxCodeUsage.js",
+      "src/shared/services/quotaAutoPing.js",
+      "src/shared/components/UsageStats.js",
+      "src/shared/components/RequestLogger.js",
+    ],
+    deps: { remove: ["recharts", "@xyflow/react"] },
+    patch: [
+      {
+        file: "src/lib/db/index.js",
+        find: `// Usage
+export {
+  statsEmitter, trackPendingRequest, getActiveRequests,
+  saveRequestUsage, getUsageHistory, getUsageStats, getChartData,
+  appendRequestLog, getRecentLogs,
+} from "./repos/usageRepo.js";
+
+// Request details
+export {
+  saveRequestDetail, getRequestDetails, getRequestDetailById, getDistinctProviders,
+} from "./repos/requestDetailsRepo.js";
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/usageDb.js",
+        writeFile: `// Stub: usage tracking removed in this fork (see scripts/lean.mjs).
+// The chat core still calls these hooks, so they stay as no-ops rather than
+// forcing edits across the hot request path.
+export const statsEmitter = { on() {}, off() {}, emit() {} };
+export function trackPendingRequest() {}
+export function getActiveRequests() { return []; }
+export async function saveRequestUsage() {}
+export async function getUsageHistory() { return []; }
+export async function getUsageStats() { return {}; }
+export async function getChartData() { return {}; }
+export async function appendRequestLog() {}
+export async function getRecentLogs() { return []; }
+export async function saveRequestDetail() {}
+export async function getRequestDetails() { return []; }
+export async function getRequestDetailById() { return null; }
+`,
+        check: "usage tracking removed in this fork",
+      },
+      {
+        file: "open-sse/handlers/chatCore/requestDetail.js",
+        find: `import { saveRequestUsage, appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "open-sse/handlers/chatCore/requestDetail.js",
+        find: `import { canonicalizeUsage } from "../../utils/usageTracking.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "open-sse/handlers/chatCore/requestDetail.js",
+        find: `
+  // Canonicalize to one storage convention (prompt_tokens cache-inclusive) so
+  // cached/cache-creation tokens survive to cost calc + stats. See canonicalizeUsage.
+  const normalized = canonicalizeUsage(tokens) || {
+    prompt_tokens: tokens.prompt_tokens ?? tokens.input_tokens ?? 0,
+    completion_tokens: tokens.completion_tokens ?? tokens.output_tokens ?? 0
+  };
+
+  saveRequestUsage({
+    provider: provider || "unknown",
+    model: model || "unknown",
+    tokens: normalized,
+    timestamp: new Date().toISOString(),
+    connectionId: connectionId || undefined,
+    apiKey: apiKey || undefined,
+    endpoint: endpoint || null
+  }).catch(() => {});
+}`,
+        replace: `
+}`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/index.js",
+        find: `export { default as RequestLogger } from "./RequestLogger";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/services/initializeApp.js",
+        find: `  if (hasQuotaAutoPingEnabled(settings)) {
+    import("@/shared/services/quotaAutoPing")
+      .then(({ startQuotaAutoPing }) => startQuotaAutoPing())
+      .catch((e) => console.log("[AutoPing] scheduler start failed:", e.message));
+  }
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/services/initializeApp.js",
+        find: `// Cheap local check: keeps the scheduler module (and its provider graph) unloaded
+// when nothing opted in. An enabled schedule counts on its own.
+function hasQuotaAutoPingEnabled(settings) {
+  return [settings?.claudeAutoPing, settings?.codexAutoPing].some((config) => (
+    Object.values(config?.connections || {}).some(Boolean)
+    || Object.values(config?.schedules || {}).some((schedule) => schedule?.enabled === true)
+  ));
+}
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/settings/route.js",
+        find: `    if (
+      Object.prototype.hasOwnProperty.call(body, "claudeAutoPing") ||
+      Object.prototype.hasOwnProperty.call(body, "codexAutoPing")
+    ) {
+      // Keep the scheduler absent when no account opted in; load its provider graph only on demand.
+      import("@/shared/services/quotaAutoPing")
+        .then(({ configureQuotaAutoPing }) => {
+          configureQuotaAutoPing(settings);
+        })
+        .catch((error) => console.warn("[AutoPing] settings update failed:", error.message));
+    }
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/dashboardGuard.js",
+        find: `  "/api/usage",
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `  { href: "/dashboard/usage", label: "Usage", icon: "bar_chart" },
+  { href: "/dashboard/quota", label: "Quota Tracker", icon: "data_usage" },
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  if (pathname.includes("/usage"))
+    return {
+      title: "Usage & Analytics",
+      description:
+        "Monitor your API usage, token consumption, and request logs",
+      icon: "bar_chart",
+      breadcrumbs: [],
+    };
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  if (pathname.includes("/quota"))
+    return {
+      title: "Quota Tracker",
+      description: "Track and manage your API quota limits",
+      icon: "data_usage",
+      breadcrumbs: [],
+    };
+`,
+        replace: "",
+        checkAbsent: true,
       },
     ],
   },
