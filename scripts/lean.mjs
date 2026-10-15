@@ -81,12 +81,11 @@ function applyPatch(rule, { dry = false } = {}) {
   if (checkAbsent && !src.includes(find)) return "skip";
 
   if (src.includes(find)) {
-    const next = src.split(find).length - 1 > 1 && !rule.allowMultiple
-      ? null
-      : src.replace(find, replace);
-    if (next === null) {
+    const matches = src.split(find).length - 1;
+    if (matches > 1 && !rule.allowMultiple) {
       throw new Error(`patch site is not unique in ${rule.file} (${JSON.stringify(find.slice(0, 60))}…)`);
     }
+    const next = rule.allowMultiple ? src.split(find).join(replace) : src.replace(find, replace);
     if (!dry) fs.writeFileSync(abs, next);
     return "applied";
   }
@@ -1266,6 +1265,213 @@ function hasQuotaAutoPingEnabled(settings) {
       title: "Quota Tracker",
       description: "Track and manage your API quota limits",
       icon: "data_usage",
+      breadcrumbs: [],
+    };
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+    ],
+  },
+
+  // 5 ── Token savers: RTK tool-result compression, headroom proxy, caveman /
+  // ponytail prompt injectors and PXPIPE image compression. The user prefers the
+  // model's own tool-selection quality over prompt compression, so every saver
+  // goes — including the per-request x-9router-token-saver header path.
+  "token-saver": {
+    title: "drop token savers (rtk, headroom, caveman, ponytail, pxpipe)",
+    delete: [
+      "open-sse/rtk",
+      "src/app/(dashboard)/dashboard/token-saver",
+      "src/app/(dashboard)/dashboard/pxpipe",
+      "src/app/api/pxpipe",
+      "src/lib/pxpipe",
+      "src/app/api/headroom",
+      "src/lib/headroom",
+    ],
+    patch: [
+      {
+        file: "open-sse/handlers/chatCore.js",
+        find: `import { injectCaveman } from "../rtk/caveman.js";
+import { injectPonytail } from "../rtk/ponytail.js";
+import { compressMessages, formatRtkLog } from "../rtk/index.js";
+import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
+import { compressWithPxpipe } from "../rtk/pxpipe.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "open-sse/handlers/chatCore.js",
+        find: `apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride,`,
+        replace: `apiKey, ccFilterNaming, sourceFormatOverride,`,
+        check: `apiKey, ccFilterNaming, sourceFormatOverride,`,
+      },
+      {
+        file: "open-sse/handlers/chatCore.js",
+        find: `  // Per-request opt-out: client can bypass all token savers via header
+  const tokenSaverEnabled = clientRawRequest?.headers?.[TOKEN_SAVER_HEADER]?.toLowerCase() !== "off";
+
+  // Cursor's translator rewrites tool_result into user text, so RTK must run on
+  // the source body before translation. Every other pair translates the tool
+  // shapes 1:1 — keep the post-translate pass there so those providers are
+  // untouched (and a retry never re-compresses an already-compressed body).
+  const preTranslateRtk = provider === "cursor"
+    ? compressMessages(body, tokenSaverEnabled && rtkEnabled)
+    : null;
+  const preTranslateRtkLine = formatRtkLog(preTranslateRtk);
+  if (preTranslateRtkLine) console.log(preTranslateRtkLine);
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "open-sse/handlers/chatCore.js",
+        find: `  // RTK: compress tool_result content. Skipped when already done pre-translate.
+  const rtkStats = preTranslateRtk || compressMessages(translatedBody, tokenSaverEnabled && rtkEnabled);
+
+  // Headroom: optional external proxy compression; fail open if proxy is absent.
+  const headroomDiagnostics = {};
+  const headroomStats = await compressWithHeadroom(translatedBody, { enabled: tokenSaverEnabled && headroomEnabled, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, timeoutMs: headroomTimeoutMs, diagnostics: headroomDiagnostics });
+  const headroomLine = formatHeadroomLog(headroomStats);
+  const headroomSizeLine = formatHeadroomSizeLog(headroomDiagnostics);
+  if (headroomLine) {
+    log?.info?.("HEADROOM", \`\${headroomLine}\${headroomSizeLine ? \` | \${headroomSizeLine}\` : ""}\`);
+    if (isHeadroomPhantomSavings(headroomStats, headroomDiagnostics)) {
+      log?.warn?.("HEADROOM", \`reported token delta, but messages and outbound JSON shrank <5% | \${formatHeadroomSizeLog(headroomDiagnostics)}\`);
+    }
+  } else if (tokenSaverEnabled && headroomEnabled) log?.warn?.("HEADROOM", \`skipped: \${headroomDiagnostics.reason || "compression unavailable"}\${headroomDiagnostics.endpoint ? \` (\${headroomDiagnostics.endpoint})\` : ""}\`);
+
+  // Token-saver flags accumulator for the single "⚙" log line below.
+  const xf = [];
+
+  if (rtkStats?.hits?.length) xf.push(\`RTK:\${rtkStats.hits.length}\`);
+
+  // Caveman: inject terse-style system prompt
+  if (tokenSaverEnabled && cavemanEnabled && cavemanLevel) {
+    injectCaveman(translatedBody, finalFormat, cavemanLevel);
+    xf.push(\`CAVEMAN:\${cavemanLevel}\`);
+  }
+
+  // Ponytail: inject lazy-senior-dev system prompt
+  if (tokenSaverEnabled && ponytailEnabled && ponytailLevel) {
+    injectPonytail(translatedBody, finalFormat, ponytailLevel);
+    xf.push(\`PONYTAIL:\${ponytailLevel}\`);
+  }
+
+  // PXPIPE: image bulky context (Claude-format bodies only), last saver before dispatch
+  let pxpipeSummary = null;
+  if (pxpipeEnabled) {
+    const pxpipeResult = await compressWithPxpipe(translatedBody, {
+      enabled: true, format: finalFormat, model: upstreamModel,
+      minChars: pxpipeMinChars, timeoutMs: pxpipeTimeoutMs, transform: pxpipeTransform,
+    });
+    pxpipeSummary = pxpipeResult.summary;
+    if (pxpipeResult.body) translatedBody = pxpipeResult.body;
+    if (pxpipeSummary?.applied) xf.push(\`PXPIPE:\${pxpipeSummary.imageCount}img\`);
+    try { onPxpipeEvent?.({ provider, model, ...pxpipeSummary }); } catch { /* stats must not break requests */ }
+  }
+
+  if (xf.length && log?.line) log.line(reqTag, "⚙", xf.join(" · "));
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "open-sse/handlers/chatCore.js",
+        find: `      pxpipe: pxpipeSummary,
+`,
+        replace: "",
+        allowMultiple: true,
+        checkAbsent: true,
+      },
+      {
+        file: "open-sse/handlers/chatCore.js",
+        find: `  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };`,
+        replace: `  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqTag, log };`,
+        check: `const sharedCtx = {`,
+      },
+      {
+        file: "src/sse/handlers/chat.js",
+        find: `import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
+import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
+import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/sse/handlers/chat.js",
+        find: `      rtkEnabled: !!chatSettings.rtkEnabled,
+      headroomEnabled: !!chatSettings.headroomEnabled,
+      headroomUrl: chatSettings.headroomUrl || DEFAULT_HEADROOM_URL,
+      headroomCompressUserMessages: !!chatSettings.headroomCompressUserMessages,
+      headroomTimeoutMs: chatSettings.headroomTimeoutMs,
+      cavemanEnabled: !!chatSettings.cavemanEnabled,
+      cavemanLevel: chatSettings.cavemanLevel || "full",
+      ponytailEnabled: !!chatSettings.ponytailEnabled,
+      ponytailLevel: chatSettings.ponytailLevel || "full",
+      pxpipeEnabled: !!chatSettings.pxpipeEnabled,
+      pxpipeMinChars: chatSettings.pxpipeMinChars,
+      pxpipeTimeoutMs: chatSettings.pxpipeTimeoutMs,
+      // Lazily warms the in-process module on first use; null when not installed (fail-open)
+      pxpipeTransform: chatSettings.pxpipeEnabled ? await getPxpipeTransform() : null,
+      onPxpipeEvent: appendPxpipeEvent,
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/db/repos/settingsRepo.js",
+        find: `const DEFAULT_HEADROOM_URL = process.env.HEADROOM_URL || "http://localhost:8787";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/db/repos/settingsRepo.js",
+        find: `  rtkEnabled: true,
+  headroomEnabled: false,
+  headroomUrl: DEFAULT_HEADROOM_URL,
+  headroomCompressUserMessages: false,
+  headroomTimeoutMs: 3000,
+  cavemanEnabled: false,
+  cavemanLevel: "full",
+  ponytailEnabled: false,
+  ponytailLevel: "full",
+  pxpipeEnabled: false,
+  pxpipeAutoInstall: true,
+  pxpipeMinChars: 25000,
+  pxpipeTimeoutMs: 15000,
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/dashboardGuard.js",
+        find: `  "/api/headroom/start",
+  "/api/headroom/stop",
+  "/api/headroom/proxy",
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `  { href: "/dashboard/token-saver", label: "Token Saver", icon: "savings" },
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  if (pathname.includes("/token-saver"))
+    return {
+      title: "Token Saver",
+      description: "Compress prompts and outputs to save tokens",
+      icon: "savings",
       breadcrumbs: [],
     };
 `,

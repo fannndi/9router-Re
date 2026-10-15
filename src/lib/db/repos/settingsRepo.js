@@ -19,9 +19,6 @@ const DEFAULT_SETTINGS = {
   comboStrategies: {},
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },
-    pdf: { enabled: false, roundRobin: false, models: [] },
-    audioInput: { enabled: true, roundRobin: false, models: [] },
-    videoInput: { enabled: false, roundRobin: false, models: [] },
   },
   requireLogin: true,
   requireApiKey: true,

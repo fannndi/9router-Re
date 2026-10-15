@@ -1,6 +1,8 @@
 /**
- * Capacity Adapter — global fallback pools of models per input-modality capability
- * (vision / pdf / audioInput / videoInput).
+ * Capacity Adapter — fallback pool of vision models for image input.
+ *
+ * Media *generation* (image/tts/stt/video) was removed from this fork; only the
+ * vision pool remains so text-only combos still answer image requests.
  *
  * The pool models are appended as extra fallback candidates behind whatever models
  * were already going to be tried (a combo's members, or a single target model).
@@ -10,7 +12,7 @@
  */
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 
-const CAPABILITY_KEYS = ["vision", "pdf", "audioInput", "videoInput"];
+const CAPABILITY_KEYS = ["vision"];
 const HARD_CAPS = new Set(CAPABILITY_KEYS);
 const DEFAULT_FALLBACK_MODEL = "oc/mimo-v2.6-flash-free";
 const upgradeLegacyModel = (m) => (m === "oc/mimo-v2.5-free" ? DEFAULT_FALLBACK_MODEL : m);
