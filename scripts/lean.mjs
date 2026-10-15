@@ -1401,10 +1401,10 @@ function hasQuotaAutoPingEnabled(settings) {
     ],
   },
 
-  // 5 ── Token savers: RTK tool-result compression, headroom proxy, caveman /
   // ponytail prompt injectors and PXPIPE image compression. The user prefers the
   // model's own tool-selection quality over prompt compression, so every saver
   // goes — including the per-request x-9router-token-saver header path.
+  // 5 ── Token savers: RTK tool-result compression, headroom proxy, caveman /
   "token-saver": {
     title: "drop token savers (rtk, headroom, caveman, ponytail, pxpipe)",
     delete: [
@@ -1415,6 +1415,7 @@ function hasQuotaAutoPingEnabled(settings) {
       "src/lib/pxpipe",
       "src/app/api/headroom",
       "src/lib/headroom",
+      "src/app/(dashboard)/dashboard/endpoint/endpointConstants.js",
     ],
     patch: [
       {
@@ -1916,6 +1917,586 @@ export async function GET() {
             </span>
           </div>
         )}
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+    ],
+  },
+
+  // 7 ── MITM (Antigravity interception) + Tunnel/Tailscale remote access.
+  // Both were always-off here and each carries background work: a watchdog,
+  // a network monitor, DNS/cert management and a browser-side ping loop. The
+  // fork is reached over LAN + the phone's mobile IP instead.
+  "mitm-tunnel": {
+    title: "drop MITM proxy + Cloudflare tunnel + Tailscale, slim the boot service",
+    delete: [
+      "src/mitm",
+      "src/lib/mitmAliasCache.js",
+      "src/lib/tunnel",
+      "src/app/api/tunnel",
+      "src/app/(dashboard)/dashboard/endpoint/endpointPing.js",
+    ],
+    patch: [
+      {
+        file: "src/shared/services/initializeApp.js",
+        writeFile: `// Minimal boot service. The fork has no tunnel, Tailscale or MITM to resume,
+// so the only deferred work left is connection housekeeping — and the OAuth
+// token-refresh scheduler was part of the provider prune (see scripts/lean.mjs).
+import { cleanupProviderConnections } from "@/lib/localDb";
+
+const STARTUP_DEFER_MS = 3000;
+
+// Survive Next.js hot reload
+const g = (global.__appSingleton ??= { booted: false });
+
+export async function initializeApp() {
+  try {
+    if (g.booted) return;
+    g.booted = true;
+    // Defer the work — nothing here blocks incoming requests.
+    setTimeout(() => {
+      cleanupProviderConnections().catch((e) =>
+        console.error("[InitApp] deferred startup failed:", e.message)
+      );
+    }, STARTUP_DEFER_MS);
+  } catch (error) {
+    console.error("[InitApp] Error:", error);
+  }
+}
+
+export default initializeApp;
+`,
+        check: "Minimal boot service",
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  if (pathname.includes("/mitm"))
+    return {
+      title: "MITM Proxy",
+      description: "Intercept CLI tool traffic and route through 9Router",
+      icon: "security",
+      breadcrumbs: [],
+    };
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/dashboardGuard.js",
+        find: `  "/api/tunnel",
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/dashboardGuard.js",
+        find: `  "/api/tunnel/tailscale-install",
+  "/api/tunnel/tailscale-enable",
+  "/api/tunnel/tailscale-disable",
+  "/api/tunnel/tailscale-check",
+  "/api/tunnel/enable",
+  "/api/tunnel/disable",
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/dashboardGuard.js",
+        find: `    let requireLogin = true;
+    let tunnelDashboardAccess = true;
+
+    try {
+      const settings = await loadSettings();
+      if (settings) {
+        requireLogin = settings.requireLogin !== false;
+        tunnelDashboardAccess = settings.tunnelDashboardAccess === true;
+
+        // Block tunnel/tailscale access if disabled (redirect to login)
+        if (!tunnelDashboardAccess) {
+          const host = (request.headers.get("host") || "").split(":")[0].toLowerCase();
+          const tunnelHost = settings.tunnelUrl ? new URL(settings.tunnelUrl).hostname.toLowerCase() : "";
+          const tailscaleHost = settings.tailscaleUrl ? new URL(settings.tailscaleUrl).hostname.toLowerCase() : "";
+          if ((tunnelHost && host === tunnelHost) || (tailscaleHost && host === tailscaleHost)) {
+            return NextResponse.redirect(new URL("/login", request.url));
+          }
+        }
+      }
+    } catch {
+      // On error, keep defaults (require login, block tunnel)
+    }`,
+        replace: `    let requireLogin = true;
+
+    try {
+      const settings = await loadSettings();
+      if (settings) {
+        requireLogin = settings.requireLogin !== false;
+      }
+    } catch {
+      // On error, keep the default (require login)
+    }`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/settings/route.js",
+        find: `const PROTECTED_SETTING_KEYS = ["password", "mitmSudoEncrypted"];`,
+        replace: `const PROTECTED_SETTING_KEYS = ["password"];`,
+        check: `const PROTECTED_SETTING_KEYS = ["password"];`,
+      },
+      {
+        file: "src/lib/db/repos/settingsRepo.js",
+        find: `const DEFAULT_MITM_ROUTER_BASE = "http://localhost:20128";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/db/repos/settingsRepo.js",
+        find: `  cloudEnabled: false,
+  tunnelEnabled: false,
+  tunnelUrl: "",
+  tunnelProvider: "cloudflare",
+  tailscaleEnabled: false,
+  tailscaleUrl: "",
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/db/repos/settingsRepo.js",
+        find: `  tunnelDashboardAccess: true,
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/db/repos/settingsRepo.js",
+        find: `  mitmRouterBaseUrl: DEFAULT_MITM_ROUTER_BASE,
+  dnsToolEnabled: {},
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: ` const [tunnelDashboardAccess, setTunnelDashboardAccess] = useState(false);`,
+        cutTo: `  const [visibleKeys, setVisibleKeys] = useState(new Set());`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `  // Security gate: block remote exposure while dashboard uses default password or login is off.`,
+        cutTo: `  const loadSettings = async () => {`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `  const loadSettings = async () => {
+    setTunnelChecking(true);
+    try {
+      const [settingsData, statusRes] = await Promise.all([
+        useSettingsStore.getState().fetchSettings(),
+        fetch("/api/tunnel/status", { cache: "no-store" })
+      ]);
+      if (settingsData) {
+        setRequireApiKey(settingsData.requireApiKey || false);
+        setRequireLogin(settingsData.requireLogin !== false);
+        setHasPassword(settingsData.hasPassword || false);
+        setTunnelDashboardAccess(settingsData.tunnelDashboardAccess || false);
+      }
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        const tEnabled = data.tunnel?.settingsEnabled ?? data.tunnel?.enabled ?? false;
+        const tUrl = data.tunnel?.tunnelUrl || "";
+        setTunnelUrl(tUrl);
+        setTunnelPublicUrl(data.tunnel?.publicUrl || "");
+        setTunnelEnabled(tEnabled);
+        updateReachable(null, tunnelClientReachableRef, tunnelMissRef, setTunnelReachable, tunnelEverReachableRef, setTunnelEverReachable);
+
+        const tsEn = data.tailscale?.settingsEnabled ?? data.tailscale?.enabled ?? false;
+        const tsUrlVal = data.tailscale?.tunnelUrl || "";
+        setTsUrl(tsUrlVal);
+        setTsEnabled(tsEn);
+        updateReachable(null, tsClientReachableRef, tsMissRef, setTsReachable, tsEverReachableRef, setTsEverReachable);
+      }
+    } catch (error) {
+      console.log("Error loading settings:", error);
+    } finally {
+      setTunnelChecking(false);
+    }
+  };`,
+        replace: `  const loadSettings = async () => {
+    try {
+      const settingsData = await useSettingsStore.getState().fetchSettings();
+      if (settingsData) {
+        setRequireApiKey(settingsData.requireApiKey || false);
+        setRequireLogin(settingsData.requireLogin !== false);
+        setHasPassword(settingsData.hasPassword || false);
+      }
+    } catch (error) {
+      console.log("Error loading settings:", error);
+    }
+  };`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `  const handleTunnelDashboardAccess = async (value) => {`,
+        cutTo: `  const handleRequireApiKey = async (value) => {`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `const pingTunnelHealth = async (...urls) => {`,
+        cutTo: `  const handleCreateKey = async () => {`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `{/* Cloudflare Tunnel */}`,
+        cutTo: `        </div>
+
+        {/* Pre-enable security gate banner */}`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `{/* Pre-enable security gate banner */}`,
+        cutTo: `      </Card>`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `      {/* Enable Tunnel Modal */}`,
+        cutTo: `      {/* Confirm Modal */}`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `import {
+  TUNNEL_BENEFITS,
+  TUNNEL_PING_INTERVAL_MS,
+  TUNNEL_PING_MAX_MS,
+  STATUS_POLL_FAST_MS,
+  REACHABLE_MISS_THRESHOLD,
+  CLIENT_PING_FAST_MS,
+} from "./endpointConstants";
+import { clientPingUrl, clientPingAny } from "./endpointPing";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `import { useState, useEffect, useRef, useCallback } from "react";`,
+        replace: `import { useState, useEffect, useRef } from "react";`,
+        check: `import { useState, useEffect, useRef } from "react";`,
+      },
+      {
+        file: "src/app/api/settings/require-login/route.js",
+        find: `    const requireLogin = settings.requireLogin !== false;
+    const tunnelDashboardAccess = settings.tunnelDashboardAccess !== false;
+    const tunnelUrl = settings.tunnelUrl || "";
+    const tailscaleUrl = settings.tailscaleUrl || "";
+    return NextResponse.json({ requireLogin, tunnelDashboardAccess, tunnelUrl, tailscaleUrl });`,
+        replace: `    const requireLogin = settings.requireLogin !== false;
+    return NextResponse.json({ requireLogin });`,
+        check: `return NextResponse.json({ requireLogin });`,
+      },
+      {
+        file: "src/app/api/auth/login/route.js",
+        find: `function isTunnelRequest(request, settings) {
+  const host = (request.headers.get("host") || "").split(":")[0].toLowerCase();
+  const tunnelHost = settings.tunnelUrl ? new URL(settings.tunnelUrl).hostname.toLowerCase() : "";
+  const tailscaleHost = settings.tailscaleUrl ? new URL(settings.tailscaleUrl).hostname.toLowerCase() : "";
+  return (tunnelHost && host === tunnelHost) || (tailscaleHost && host === tailscaleHost);
+}
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/api/auth/login/route.js",
+        find: `    // Block login via tunnel/tailscale if dashboard access is disabled
+    if (isTunnelRequest(request, settings) && settings.tunnelDashboardAccess !== true) {
+      return NextResponse.json({ error: "Dashboard access via tunnel is disabled" }, { status: 403 });
+    }
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/app/layout.js",
+        find: `import "@/shared/services/bootstrap"; // Auto-run initializeApp (watchdog, auto-resume tunnel)`,
+        replace: `import "@/shared/services/bootstrap"; // Auto-run initializeApp (deferred housekeeping)`,
+        check: `deferred housekeeping`,
+      },
+      {
+        file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+        find: `import StatusAlert from "./components/StatusAlert";
+import Tooltip from "./components/Tooltip";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+    ],
+  },
+  // 8 ── Cosmetics + dead weight: docs sites, deploy manifests, npm CLI package,
+  // Skills, Translator debugger, pricing page, 9Remote/9English/Donate promos and
+  // the sql.js DB fallback (node:sqlite is always present on Node ≥22.5).
+  cosmetics: {
+    title: "drop docs/deploy extras, npm CLI, Skills, Translator, pricing, promos, sql.js",
+    delete: [
+      "gitbook",
+      "images",
+      "docs",
+      "README.zh-CN.md",
+      "Dockerfile",
+      "docker-compose.yml",
+      "captain-definition",
+      "start.sh",
+      ".dockerignore",
+      "DOCKER.md",
+      ".github/workflows",
+      "cli",
+      "skills",
+      "src/app/(dashboard)/dashboard/basic-chat",
+      "src/app/(dashboard)/dashboard/skills",
+      "src/shared/constants/skills.js",
+      "src/app/landing",
+      "src/app/api/pricing",
+      "src/app/dashboard",
+      "src/shared/components/PricingModal.js",
+      "src/shared/components/NineRemoteButton.js",
+      "src/shared/components/NineRemotePromoModal.js",
+      "src/shared/components/DonateModal.js",
+      "src/app/(dashboard)/dashboard/translator",
+      "src/app/api/translator",
+    ],
+    deps: {
+      remove: [
+        "@monaco-editor/react",
+        "monaco-editor",
+        "@next/third-parties",
+        "open",
+        "marked",
+        "sql.js",
+        "selfsigned",
+        "http-proxy-middleware",
+      ],
+    },
+    patch: [
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `import { useState, useEffect } from "react";`,
+        replace: `import { useState } from "react";`,
+        check: `import { useState } from "react";`,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `import useSettingsStore from "@/store/settingsStore";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `  const [enableTranslator, setEnableTranslator] = useState(false);
+
+  useEffect(() => {
+    useSettingsStore.getState().fetchSettings().then((data) => {
+      if (data?.enableTranslator) setEnableTranslator(true);
+    });
+  }, []);
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `  { href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },
+  { href: "/dashboard/translator", label: "Translator", icon: "translate" },
+`,
+        replace: `  { href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },
+`,
+        check: `{ href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },`,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `  { href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan" },
+  { href: "/dashboard/skills", label: "Skills", icon: "extension" },
+`,
+        replace: `  { href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan" },
+`,
+        check: `{ href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "lan" },`,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `            {debugItems.map((item) => {
+              const show = item.href !== "/dashboard/translator" || enableTranslator;
+              return show ? (
+                <Link`,
+        replace: `            {debugItems.map((item) => (
+                <Link`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `                </Link>
+              ) : null;
+            })}
+`,
+        replace: `                </Link>
+            ))}
+`,
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Sidebar.js",
+        find: `
+            {/* Remote */}
+            <a
+              href="https://9remote.cc"
+              target="_blank"
+              rel="noreferrer"
+              onClick={onClose}
+              className={cn(
+                "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group w-full",
+                "text-text-muted hover:bg-surface-2 hover:text-text-main"
+              )}
+            >
+              <span className="material-symbols-outlined text-[18px] group-hover:text-primary transition-colors">
+                computer
+              </span>
+              <span className="text-[13px] font-medium">9Remote</span>
+              <span className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-[3px] bg-orange-500/15 text-orange-400">
+                HOT
+              </span>
+            </a>
+
+            {/* 9English */}
+            <a
+              href="https://9english.net/"
+              target="_blank"
+              rel="noreferrer"
+              onClick={onClose}
+              className={cn(
+                "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group w-full",
+                "text-text-muted hover:bg-surface-2 hover:text-text-main"
+              )}
+            >
+              <span className="material-symbols-outlined text-[18px] group-hover:text-primary transition-colors">
+                translate
+              </span>
+              <span className="text-[13px] font-medium">9English</span>
+            </a>
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `import DonateModal from "@/shared/components/DonateModal";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  const [donateOpen, setDonateOpen] = useState(false);
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `        <button
+          onClick={() => setDonateOpen(true)}
+          className="hidden sm:flex items-center gap-1.5 px-3 h-8 rounded-lg border border-pink-500/30 bg-pink-500/10 text-pink-600 dark:text-pink-400 hover:bg-pink-500/20 transition-colors text-sm font-medium"
+          aria-label="Donate"
+        >
+          <span className="material-symbols-outlined text-[18px]">volunteer_activism</span>
+          <span className="hidden sm:inline">Donate</span>
+        </button>
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `      <DonateModal isOpen={donateOpen} onClose={() => setDonateOpen(false)} />
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  if (pathname.includes("/skills"))
+    return {
+      title: "Agent Skills",
+      description: "Copy a link and paste to your AI to use 9Router — no install needed",
+      icon: "extension",
+      breadcrumbs: [],
+    };
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/Header.js",
+        find: `  if (pathname.includes("/translator"))
+    return {
+      title: "Translator",
+      description: "Debug translation flow between formats",
+      icon: "translate",
+      breadcrumbs: [],
+    };
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/shared/components/index.js",
+        find: `export { default as NineRemoteButton } from "./NineRemoteButton";
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/db/driver.js",
+        find: `async function trySqlJs() {
+  try {
+    const { createSqlJsAdapter } = await import("./adapters/sqljsAdapter.js");
+    return await createSqlJsAdapter(DATA_FILE);
+  } catch (e) {
+    console.warn(\`[DB] sql.js unavailable: \${e.message}\`);
+    return null;
+  }
+}
+
+`,
+        replace: "",
+        checkAbsent: true,
+      },
+      {
+        file: "src/lib/db/driver.js",
+        find: `  // Order per runtime:
+  //   Bun:  bun:sqlite → sql.js
+  //   Node: better-sqlite3 → node:sqlite (≥22.5) → sql.js
+  let adapter = await tryBunSqlite();
+  if (!adapter) adapter = await tryBetterSqlite();
+  if (!adapter) adapter = await tryNodeSqlite();
+  if (!adapter) adapter = await trySqlJs();
+  if (!adapter) throw new Error("[DB] No SQLite driver available (bun/better/node/sql.js all failed)");`,
+        replace: `  // Order per runtime:
+  //   Bun:  bun:sqlite
+  //   Node: better-sqlite3 → node:sqlite (≥22.5)
+  let adapter = await tryBunSqlite();
+  if (!adapter) adapter = await tryBetterSqlite();
+  if (!adapter) adapter = await tryNodeSqlite();
+  if (!adapter) throw new Error("[DB] No SQLite driver available (bun/better/node all failed)");`,
+        check: `No SQLite driver available (bun/better/node all failed)`,
+      },
+      {
+        file: "package.json",
+        find: `    "cli:pack": "npm --prefix cli run pack:cli",
+    "cli:publish": "npm --prefix cli run publish:cli"
 `,
         replace: "",
         checkAbsent: true,
