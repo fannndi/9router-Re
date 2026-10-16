@@ -80,7 +80,7 @@ describe("normalize helpers", () => {
     expect(usage.normalizeTokens(null)).toBeNull();
   });
 
-  it("strips the combo provider alias from model and provider", async () => {
+  it("strips the provider alias from model and provider", async () => {
     const { usage } = await loadModules();
     expect(usage.normalizeModel("oc/space-bunny-free")).toBe("space-bunny-free");
     expect(usage.normalizeModel("muse-spark-1.3-contributor-free")).toBe("muse-spark-1.3-contributor-free");

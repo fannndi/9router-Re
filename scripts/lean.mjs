@@ -3,7 +3,7 @@
 // lean.mjs — fork-slimming tool for fannndi/9router-Re
 //
 // The fork keeps only what the free-tier multi-IP gateway needs:
-//   providers(opencode free) + proxy pools + combos + API keys + vision input.
+//   providers(opencode free) + proxy pools + API keys + vision input.
 // Everything else (cli-tools, media, usage/quota, token savers, mitm, tunnel,
 // sso, updater, extra providers) is stripped.
 //
@@ -811,125 +811,6 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";`,
         replace: "",
         checkAbsent: true,
       },
-      {
-        file: "src/app/(dashboard)/dashboard/combos/page.js",
-        find: `  const [presetLoading, setPresetLoading] = useState(null); // "cursor" | "claude" | null
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/(dashboard)/dashboard/combos/page.js",
-        find: `  const handleGeneratePresets = async (source) => {
-    const label = source === "cursor" ? "Cursor Default" : "Claude Default";
-    setPresetLoading(source);
-    try {
-      const previewRes = await fetch(\`/api/combos/presets?source=\${source}\`);
-      const preview = await previewRes.json();
-      if (!previewRes.ok) {
-        alert(preview.error || \`Failed to preview \${label}\`);
-        return;
-      }
-
-      const toCreate = preview.toCreate ?? (preview.items || []).filter((i) => !i.exists).length;
-      const toSkip = preview.toSkip ?? (preview.items || []).filter((i) => i.exists).length;
-      const total = (preview.items || []).length;
-
-      if (total === 0) {
-        alert(\`No \${label} models available to generate.\`);
-        return;
-      }
-
-      if (toCreate === 0) {
-        alert(\`All \${total} \${label} combos already exist. Nothing to create.\`);
-        return;
-      }
-
-      setConfirmState({
-        title: \`Generate \${label}\`,
-        message: \`Create \${toCreate} combo\${toCreate === 1 ? "" : "s"} named like \${source === "cursor" ? "Cursor" : "Claude"} model IDs (seeded with cu/… or cc/…). \${toSkip} already exist and will be skipped. You can edit any combo afterward to add fallbacks.\`,
-        confirmText: "Generate",
-        variant: "primary",
-        onConfirm: async () => {
-          setConfirmState((prev) => prev ? { ...prev, loading: true } : null);
-          try {
-            const res = await fetch("/api/combos/presets", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ source }),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-              alert(data.error || \`Failed to generate \${label}\`);
-              return;
-            }
-            await fetchData();
-            setConfirmState(null);
-          } catch (error) {
-            console.log(\`Error generating \${label}:\`, error);
-            alert(\`Failed to generate \${label}\`);
-            setConfirmState((prev) => prev ? { ...prev, loading: false } : null);
-          }
-        },
-      });
-    } catch (error) {
-      console.log(\`Error previewing \${label}:\`, error);
-      alert(\`Failed to preview \${label}\`);
-    } finally {
-      setPresetLoading(null);
-    }
-  };
-
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/(dashboard)/dashboard/combos/page.js",
-        find: `          <p className="hidden text-xs text-text-muted mt-3 max-w-2xl">
-            <span className="font-medium text-text-main">Cursor / Claude Default</span> create combos named exactly like those clients&apos; model IDs (e.g. <code className="font-mono">composer-2.5</code>, <code className="font-mono">opus</code>), seeded with the matching <code className="font-mono">cu/…</code> or <code className="font-mono">cc/…</code> route so traffic can hit 9router without the prefix.
-            {" "}Note: Cursor IDE itself often blocks built-in Composer / Grok from Override OpenAI Base URL (&quot;model does not support custom API&quot;); add them via Cursor&apos;s <span className="font-medium text-text-main">Add Custom Model</span> using the combo name, or pick a model Cursor allows through the custom endpoint.
-          </p>
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/(dashboard)/dashboard/combos/page.js",
-        find: `          <div className="hidden">
-            <Button
-              variant="secondary"
-              size="sm"
-              icon="edit_note"
-              loading={presetLoading === "cursor"}
-              disabled={!!presetLoading}
-              onClick={() => handleGeneratePresets("cursor")}
-              className="w-full whitespace-nowrap"
-            >
-              Cursor Default
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              icon="smart_toy"
-              loading={presetLoading === "claude"}
-              disabled={!!presetLoading}
-              onClick={() => handleGeneratePresets("claude")}
-              className="w-full whitespace-nowrap"
-            >
-              Claude Default
-            </Button>
-          </div>
-`,
-        replace: "",
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/(dashboard)/dashboard/combos/page.js",
-        find: `      {/* Confirm (delete / generate presets) */}`,
-        replace: `      {/* Confirm delete */}`,
-        check: `{/* Confirm delete */}`,
-      },
     ],
   },
 
@@ -1113,62 +994,6 @@ const COMBINED_WEB_ITEM = { id: "web", label: "Web Fetch & Search", icon: "trave
         file: "src/shared/components/Header.js",
         find: `  if (pathname.includes("/providers") && !pathname.includes("/media-providers"))`,
         replace: `  if (pathname.includes("/providers"))`,
-      },
-      {
-        file: "open-sse/services/capacityAdapter.js",
-        find: ` * Capacity Adapter — global fallback pools of models per input-modality capability
- * (vision / pdf / audioInput / videoInput).`,
-        replace: ` * Capacity Adapter — fallback pool of vision models for image input.
- *
- * Media *generation* (image/tts/stt/video) was removed from this fork; only the
- * vision pool remains so text-only combos still answer image requests.`,
-        check: `fallback pool of vision models for image input`,
-      },
-      {
-        file: "open-sse/services/capacityAdapter.js",
-        find: `const CAPABILITY_KEYS = ["vision", "pdf", "audioInput", "videoInput"];`,
-        replace: `const CAPABILITY_KEYS = ["vision"];`,
-        check: `const CAPABILITY_KEYS = ["vision"];`,
-      },
-      {
-        file: "src/lib/db/repos/settingsRepo.js",
-        find: `  capacityAdapter: {
-    vision: { enabled: true, roundRobin: false, models: [] },
-    pdf: { enabled: false, roundRobin: false, models: [] },
-    audioInput: { enabled: true, roundRobin: false, models: [] },
-    videoInput: { enabled: false, roundRobin: false, models: [] },
-  },`,
-        replace: `  capacityAdapter: {
-    vision: { enabled: true, roundRobin: false, models: [] },
-  },`,
-        check: `  capacityAdapter: {
-    vision: { enabled: true, roundRobin: false, models: [] },
-  },`,
-      },
-      {
-        file: "src/app/(dashboard)/dashboard/combos/page.js",
-        find: `const CAPACITY_ADAPTER_CAPS = [
-  { key: "vision", label: "Vision", icon: "visibility", desc: "images (png, jpg, webp, …)" },
-  // pdf, videoInput temporarily hidden — no translator support yet for those blocks.
-  { key: "audioInput", label: "Audio", icon: "graphic_eq", desc: "audio input" },
-];`,
-        replace: `const CAPACITY_ADAPTER_CAPS = [
-  { key: "vision", label: "Vision", icon: "visibility", desc: "images (png, jpg, webp, …)" },
-];`,
-        checkAbsent: true,
-      },
-      {
-        file: "src/app/(dashboard)/dashboard/combos/page.js",
-        find: `const EMPTY_CAPACITY_ADAPTER = {
-  vision: { ...EMPTY_CAP_ENTRY },
-  pdf: { ...EMPTY_CAP_ENTRY },
-  audioInput: { ...EMPTY_CAP_ENTRY },
-  videoInput: { ...EMPTY_CAP_ENTRY },
-};`,
-        replace: `const EMPTY_CAPACITY_ADAPTER = {
-  vision: { ...EMPTY_CAP_ENTRY },
-};`,
-        checkAbsent: true,
       },
     ],
   },
@@ -4319,22 +4144,6 @@ PHASES["pool-usage"] = {
       check: `reason: result.status ? String(result.status) : "transport",`,
     },
 
-    // ── combo.js: zero-content seats count as fails (reason "empty")
-    {
-      file: "open-sse/services/combo.js",
-      find: `import { extractTextContent } from "../translator/formats/gemini.js";`,
-      replace: `import { extractTextContent } from "../translator/formats/gemini.js";\nimport { recordUsageEvent } from "@/lib/usageStats.js";`,
-      check: `import { recordUsageEvent } from "@/lib/usageStats.js";`,
-    },
-    {
-      file: "open-sse/services/combo.js",
-      find: `                log.warn("COMBO", \`Model \${modelStr} returned HTTP 200 with zero usable content, falling back to next model\`);
-                lastError = "Zero usable content";`,
-      replace: `                log.warn("COMBO", \`Model \${modelStr} returned HTTP 200 with zero usable content, falling back to next model\`);
-                recordUsageEvent({ ok: false, provider: modelStr.split("/")[0], model: modelStr.split("/").pop(), reason: "empty" });
-                lastError = "Zero usable content";`,
-      check: `reason: "empty" });`,
-    },
 
     // ── dashboard nav + header
     {
@@ -4526,6 +4335,875 @@ PHASES["zen-caps"] = {
   return entries;
 }`,
       check: `const addEntry = (provider, model, contextLength) =>`,
+    },
+  ],
+};
+
+PHASES["no-combo"] = {
+  title: "remove Combo & Vision Adapter (per-model routing only)",
+  delete: [
+    "open-sse/services/combo.js",
+    "open-sse/services/capacityAdapter.js",
+    "src/app/api/combos",
+    "src/app/(dashboard)/dashboard/combos",
+    "src/shared/components/ComboFormModal.js",
+    "src/lib/db/repos/combosRepo.js",
+    "src/lib/comboPresets.js",
+    "tests/unit/combo-capabilities.test.js",
+    "tests/unit/combo-routing.test.js",
+    "tests/unit/combo-fusion.test.js",
+    "tests/unit/fusion-strip-stream-options-3024.test.js",
+    "tests/unit/hermes-vision-detection.test.js",
+  ],
+  patch: [
+    // ── chat handler: single-model path only (no combo branch, no adapter remap)
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { getModelInfo, getComboModels } from "../services/model.js";`,
+      replace: `import { getModelInfo } from "../services/model.js";`,
+      check: `import { getModelInfo } from "../services/model.js";`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";`,
+      replace: `import { getKeyAccessContext, enforceKeyAccess } from "../services/keyAccess.js";`,
+      check: `import { getKeyAccessContext, enforceKeyAccess } from "../services/keyAccess.js";`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `  // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots`,
+      replace: `  // Bypass naming/warmup requests before any credential or rotation work`,
+      check: `  // Bypass naming/warmup requests before any credential or rotation work`,
+    },
+    // Nested combo branch in handleSingleModelChat first: the top-level branch is
+    // cut after it, so the 2-space anchor cannot match inside the removed block.
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `  // If provider is null, this might be a combo name - check and handle`,
+      replace: `  // A null provider means the string matched no provider, alias or node.`,
+      check: `  // A null provider means the string matched no provider, alias or node.`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `    const comboModels = await getComboModels(modelStr);
+    if (comboModels) {`,
+      cutTo: `    log.warn("CHAT", "Invalid model format", { model: modelStr });`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `  const requiredCapabilities = detectRequiredCapabilities(body);`,
+      cutTo: `  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker`,
+    },
+
+    // ── model resolution: combos are gone, every request is a single model
+    {
+      file: "src/sse/services/model.js",
+      find: `import { getModelAliases, getComboByName, getProviderNodes } from "@/lib/localDb";`,
+      replace: `import { getModelAliases, getProviderNodes } from "@/lib/localDb";`,
+      check: `import { getModelAliases, getProviderNodes } from "@/lib/localDb";`,
+    },
+    {
+      file: "src/sse/services/model.js",
+      find: `  // Check if this is a combo name before resolving as alias
+  // This prevents combo names from being incorrectly routed to providers
+  const combo = await getComboByName(parsed.model);
+  if (combo) {
+    // Return null provider to signal this should be handled as combo
+    // The caller (handleChat) will detect this and handle it as combo
+    return { provider: null, model: parsed.model };
+  }
+
+  return getModelInfoCore(modelStr, getModelAliases);
+`,
+      replace: `  return getModelInfoCore(modelStr, getModelAliases);
+`,
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/model.js",
+      cutFrom: `/**
+ * Check if model is a combo and get models list`,
+    },
+
+    // ── key access: allow lists hold models only
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `// Per-API-key access control for the /v1/* inference keys.
+//
+// Two modes per key: UNRESTRICTED (default — exactly today's behaviour) or
+// RESTRICTED, where the key may call ONLY the combos and models in its allow
+// list. No wildcards, no deny mode. Matching is exact and case-insensitive, on
+// RESOLVED identities, so every spelling that routes to the same target is
+// treated the same and no spelling can route somewhere the list does not name:
+//
+//   * a request that routes as a combo (getComboModels — the lookup routing
+//     itself uses) is allowed iff that combo's name is listed;
+//   * a request that routes to a model is allowed iff its resolved
+//     \`providerId/model\` equals the resolved \`providerId/model\` of a listed
+//     model entry. So \`cx/gpt-5\`, \`codex/gpt-5\` and an alias that points there
+//     are one target; a raw string that merely looks like a listed entry but
+//     routes elsewhere (e.g. \`MAIN\` when the combo is \`Main\`, which routes to
+//     \`openai/MAIN\`) is not;
+//   * search/fetch (provider IS the model) are allowed iff the resolved
+//     provider id is listed, or the request is a listed combo.
+//
+// An allowed combo grants its members when they are reached THROUGH that combo
+// (the check runs once, on the requested target, before combo expansion). It
+// does not grant calling a member directly by name — that needs its own entry.
+// The check runs before any credential lookup, so a denied request never
+// touches a provider account.`,
+      replace: `// Per-API-key access control for the /v1/* inference keys.
+//
+// Two modes per key: UNRESTRICTED (default — exactly today's behaviour) or
+// RESTRICTED, where the key may call ONLY the models in its allow list. No
+// wildcards, no deny mode. Matching is exact and case-insensitive, on RESOLVED
+// identities, so every spelling that routes to the same target is treated the
+// same and no spelling can route somewhere the list does not name:
+//
+//   * a request that routes to a model is allowed iff its resolved
+//     \`providerId/model\` equals the resolved \`providerId/model\` of a listed
+//     model entry. So \`cx/gpt-5\`, \`codex/gpt-5\` and an alias that points there
+//     are one target; a raw string that merely looks like a listed entry but
+//     routes elsewhere (e.g. \`MAIN\` as an alias of \`openai/MAIN\`) is not;
+//   * search/fetch (provider IS the model) are allowed iff the resolved
+//     provider id is listed.
+//
+// The check runs before any credential lookup, so a denied request never
+// touches a provider account.`,
+      check: `// RESTRICTED, where the key may call ONLY the models in its allow list. No`,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `import { getCombos } from "@/lib/db/repos/combosRepo.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `import { getModelInfo, getComboModels } from "./model.js";`,
+      replace: `import { getModelInfo } from "./model.js";`,
+      check: `import { getModelInfo } from "./model.js";`,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `import {
+  KEY_ACCESS_COMBO_OWNER,
+  KEY_ACCESS_PROVIDER_AS_MODEL_KINDS,
+  keyAccessDeniedMessage,
+} from "@/shared/constants/keyAccess.js";`,
+      replace: `import {
+  KEY_ACCESS_PROVIDER_AS_MODEL_KINDS,
+  keyAccessDeniedMessage,
+} from "@/shared/constants/keyAccess.js";`,
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `  const comboNames = new Set((await getCombos()).map((c) => lower(c.name)));
+  const combos = new Set();
+  const models = new Set();
+  const providers = new Set();
+  for (const entry of ctx.allow) {
+    const key = lower(entry);
+    if (comboNames.has(key)) {
+      combos.add(key);
+      continue;
+    }
+    const info = await getModelInfo(entry);`,
+      replace: `  const models = new Set();
+  const providers = new Set();
+  for (const entry of ctx.allow) {
+    const key = lower(entry);
+    const info = await getModelInfo(entry);`,
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `  ctx._sets = { combos, models, providers };`,
+      replace: `  ctx._sets = { models, providers };`,
+      check: `  ctx._sets = { models, providers };`,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `  const info = await getModelInfo(requested);
+  // provider null ⇔ an existing combo with no members (routes nowhere).
+  if (!info?.provider) return sets.combos.has(lower(requested));
+  return sets.models.has(canonicalModel(info.provider, info.model));`,
+      replace: `  const info = await getModelInfo(requested);
+  if (!info?.provider) return false;
+  return sets.models.has(canonicalModel(info.provider, info.model));`,
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `  const sets = await getAllowSets(ctx);
+  const comboModels = await getComboModels(requested);
+  const allowed = comboModels
+    ? sets.combos.has(lower(requested))
+    : await isModelStringAllowed(ctx, requested);
+  return allowed ? null : keyAccessDeniedResponse(ctx, requested);`,
+      replace: `  const allowed = await isModelStringAllowed(ctx, requested);
+  return allowed ? null : keyAccessDeniedResponse(ctx, requested);`,
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `export async function enforceKeyAccessProvider(ctx, requested, comboModels) {
+  if (!ctx) return null;
+  if (typeof requested !== "string" || !requested) return keyAccessDeniedResponse(ctx, String(requested ?? ""));
+  const sets = await getAllowSets(ctx);
+  const allowed = comboModels
+    ? sets.combos.has(lower(requested))
+    : sets.providers.has(lower(resolveProviderId(requested)));
+  return allowed ? null : keyAccessDeniedResponse(ctx, requested);
+}`,
+      replace: `export async function enforceKeyAccessProvider(ctx, requested) {
+  if (!ctx) return null;
+  if (typeof requested !== "string" || !requested) return keyAccessDeniedResponse(ctx, String(requested ?? ""));
+  const sets = await getAllowSets(ctx);
+  return sets.providers.has(lower(resolveProviderId(requested))) ? null : keyAccessDeniedResponse(ctx, requested);
+}`,
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: ` * Gate for search/fetch, where the provider IS the model.
+ * @param {string[]|null} comboModels - routing's own combo resolution for \`requested\`
+ */`,
+      replace: ` * Gate for search/fetch, where the provider IS the model.
+ */`,
+      checkAbsent: true,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `// Resolve the allow list once per request: combo names, resolved model ids,
+// and resolved provider ids (for provider-as-model kinds).`,
+      replace: `// Resolve the allow list once per request: resolved model ids and resolved
+// provider ids (for provider-as-model kinds).`,
+      check: `// Resolve the allow list once per request: resolved model ids and resolved`,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `/**
+ * Capacity-adapter models are appended by the gateway, not chosen by the`,
+      cutTo: `/** /v1/models: a restricted key sees only the combos and models it may call. */`,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `/** /v1/models: a restricted key sees only the combos and models it may call. */`,
+      replace: `/** /v1/models: a restricted key sees only the models it may call. */`,
+      check: `/** /v1/models: a restricted key sees only the models it may call. */`,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: `    if (entry.owned_by === KEY_ACCESS_COMBO_OWNER) {
+      if (sets.combos.has(lower(entry.id))) out.push(entry);
+      continue;
+    }\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+
+    // ── /v1/models: combos are no longer listed
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";`,
+      replace: `import { getProviderConnections, getCustomModels, getModelAliases } from "@/lib/localDb";`,
+      check: `import { getProviderConnections, getCustomModels, getModelAliases } from "@/lib/localDb";`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";`,
+      replace: `import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";`,
+      check: `import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `// Combo seats use UI aliases; the model registry also has transport aliases.
+// Capability overrides and catalog limits are keyed by provider id.
+const ALIAS_TO_PROVIDER_ID = {
+  ...Object.fromEntries(
+    Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
+  ),
+  ...ALIAS_TO_ID,
+};
+
+function comboSeatCapabilities(seat) {
+  const slash = seat.indexOf("/");
+  if (slash <= 0) return null;
+  const alias = seat.slice(0, slash);
+  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, seat.slice(slash + 1));
+}
+`,
+      replace: `// UI aliases vs the model registry's transport aliases; capability overrides
+// and catalog limits are keyed by provider id.
+const ALIAS_TO_PROVIDER_ID = {
+  ...Object.fromEntries(
+    Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
+  ),
+  ...ALIAS_TO_ID,
+};
+`,
+      check: `// UI aliases vs the model registry's transport aliases; capability overrides`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `// LLM kind sentinel — combos/models with no explicit kind default to LLM`,
+      replace: `// LLM kind sentinel — models with no explicit kind default to LLM`,
+      check: `// LLM kind sentinel — models with no explicit kind default to LLM`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `// Combo matches kindFilter when its \`kind\` field is in the list.
+// Combos with no kind are treated as LLM.
+function comboMatchesKinds(combo, kindFilter) {
+  const kind = combo?.kind || LLM_KIND;
+  return kindFilter.includes(kind);
+}
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `// Nested combo names are valid seats — the model selector exposes them and`,
+      cutTo: `/**
+ * Build OpenAI-format models list filtered by service kinds.`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `  let combos = [];
+  try {
+    combos = await getCombos();
+  } catch (e) {
+    console.log("Could not fetch combos");
+  }
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `  const combosByName = new Map(
+    combos.filter((c) => typeof c?.name === "string").map((c) => [c.name, c]),
+  );
+
+  // Lookup map so aggregateComboCapabilities can recursively resolve nested combos
+  const comboByName = Object.fromEntries(combos.map((c) => [c.name, c.models]));
+
+  // Combos first (filtered by kind). Web combos expose \`kind\` so AI knows search vs fetch.
+  for (const combo of combos) {
+    if (!comboMatchesKinds(combo, kindFilter)) continue;
+    const entry = {
+      id: combo.name,
+      object: "model",
+      owned_by: "combo",
+    };
+    if (combo.kind === "webSearch" || combo.kind === "webFetch") {
+      entry.kind = combo.kind;
+    } else {
+      const comboCaps = aggregateComboCapabilities(combo.models, comboByName, comboSeatCapabilities);
+      if (comboCaps) entry.capabilities = comboCaps;
+      // Any seat can serve the request, so the only window a combo can promise is
+      // its smallest. Combo entries were the only models on this endpoint that
+      // published no limits at all, which leaves a client to guess from the name —
+      // and it guesses high (see the snake_case note on the per-provider path).
+      const { contextWindow, maxOutput } = comboSeatLimits(combo, combosByName);
+      if (Number.isFinite(contextWindow)) entry.context_length = contextWindow;
+      if (Number.isFinite(maxOutput)) entry.max_completion_tokens = maxOutput;
+    }
+    models.push(entry);
+  }
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+
+    // ── capability aggregation helper (combos only)
+    {
+      file: "open-sse/providers/capabilities.js",
+      find: `/**
+ * Aggregate capabilities for a combo from its constituent model IDs.`,
+      cutTo: `/**
+ * Resolve capabilities for a model using the 4-step fallback chain,`,
+    },
+
+    // ── settings: combo strategy + adapter knobs are gone
+    {
+      file: "src/app/api/settings/route.js",
+      find: `import { resetComboRotation } from "open-sse/services/combo.js";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/api/settings/route.js",
+      find: `    // Invalidate combo rotation state when strategy settings change
+    if (
+      Object.prototype.hasOwnProperty.call(body, "comboStrategy") ||
+      Object.prototype.hasOwnProperty.call(body, "comboStickyRoundRobinLimit") ||
+      Object.prototype.hasOwnProperty.call(body, "comboStrategies")
+    ) {
+      resetComboRotation();
+    }
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/repos/settingsRepo.js",
+      find: `  comboStrategy: "fallback",
+  comboStickyRoundRobinLimit: 1,
+  comboStrategies: {},
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/repos/settingsRepo.js",
+      find: `  capacityAdapter: {
+    vision: { enabled: true, roundRobin: false, models: [] },
+  },
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/repos/settingsRepo.js",
+      find: `  capacityAdapter: {
+    vision: { enabled: true, roundRobin: false, models: [] },
+    pdf: { enabled: false, roundRobin: false, models: [] },
+    audioInput: { enabled: true, roundRobin: false, models: [] },
+    videoInput: { enabled: false, roundRobin: false, models: [] },
+  },
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/repos/settingsRepo.js",
+      find: `  if (merged.capacityAdapter && typeof merged.capacityAdapter === "object") {
+    for (const capKey of Object.keys(merged.capacityAdapter)) {
+      const entry = merged.capacityAdapter[capKey];
+      if (Array.isArray(entry?.models)) {
+        entry.models = entry.models.map((m) =>
+          m === "oc/mimo-v2.5-free" ? "oc/mimo-v2.6-flash-free" : m
+        );
+      }
+    }
+  }
+  return merged;
+`,
+      replace: `  return merged;
+`,
+      checkAbsent: true,
+    },
+
+    // ── DB layer: no combos column/table wiring
+    {
+      file: "src/lib/db/index.js",
+      find: `// Combos
+export {
+  getCombos, getComboById, getComboByName,
+  createCombo, updateCombo, deleteCombo,
+} from "./repos/combosRepo.js";
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/index.js",
+      find: `    combos: db.all(\`SELECT * FROM combos\`).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), createdAt: r.createdAt, updatedAt: r.updatedAt })),\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/index.js",
+      find: `    db.run(\`DELETE FROM combos\`);\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/index.js",
+      find: `    for (const c of payload.combos || []) {
+      db.run(
+        \`INSERT OR REPLACE INTO combos(id, name, kind, models, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)\`,
+        [c.id, c.name, c.kind || null, stringifyJson(c.models || []), c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
+      );
+    }
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/localDb.js",
+      find: `  getCombos, getComboById, getComboByName,
+  createCombo, updateCombo, deleteCombo,
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/models/index.js",
+      find: `  getCombos,
+  getComboById,
+  getComboByName,
+  createCombo,
+  updateCombo,
+  deleteCombo,
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+
+    // ── schema: drop the table, versioned migration 002 does the DDL for old DBs
+    {
+      file: "src/lib/db/schema.js",
+      find: `export const SCHEMA_VERSION = 2;`,
+      replace: `export const SCHEMA_VERSION = 3;`,
+      check: `export const SCHEMA_VERSION = 3;`,
+    },
+    {
+      file: "src/lib/db/schema.js",
+      find: `  combos: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      name: "TEXT UNIQUE NOT NULL",
+      kind: "TEXT",
+      models: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: ["CREATE INDEX IF NOT EXISTS idx_combo_name ON combos(name)"],
+  },
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/lib/db/migrations/index.js",
+      find: `import m001 from "./001-initial.js";
+
+export const MIGRATIONS = [m001].sort((a, b) => a.version - b.version);`,
+      replace: `import m001 from "./001-initial.js";
+import m002 from "./002-drop-combos.js";
+
+export const MIGRATIONS = [m001, m002].sort((a, b) => a.version - b.version);`,
+      check: `import m002 from "./002-drop-combos.js";`,
+    },
+    {
+      file: "src/lib/db/migrate.js",
+      find: `  importWithAssertion(adapter, "combos", data.combos || [], (c) => {
+    adapter.run(
+      \`INSERT OR REPLACE INTO combos(id, name, kind, models, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)\`,
+      [c.id, c.name, c.kind || null, stringifyJson(c.models || []), c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
+    );
+  }, (c) => ({ id: c.id ?? null, name: c.name ?? null }));
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+
+    // ── UI: nav, header, guard, profile knobs, pickers, endpoint copy
+    {
+      file: "src/shared/constants/keyAccess.js",
+      find: `// /v1/models owner tag for combo entries.
+export const KEY_ACCESS_COMBO_OWNER = "combo";
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/Sidebar.js",
+      find: `  { href: "/dashboard/combos", label: "Combo & Vision Adapter", icon: "layers" },\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/Header.js",
+      find: `  if (pathname.includes("/combos"))
+    return {
+      title: "Combos",
+      description: "Model combos with fallback",
+      icon: "layers",
+      breadcrumbs: [],
+    };
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/index.js",
+      find: `export { default as ComboFormModal } from "./ComboFormModal";\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/dashboardGuard.js",
+      find: `  "/api/combos",\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `  const updateComboStrategy = async (strategy) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboStrategy: strategy }),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, comboStrategy: strategy }));
+      }
+    } catch (err) {
+      console.error("Failed to update combo strategy:", err);
+    }
+  };
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `  const updateComboStickyLimit = async (limit) => {
+    const numLimit = parseInt(limit);
+    if (isNaN(numLimit) || numLimit < 1) return;
+
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboStickyRoundRobinLimit: numLimit }),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, comboStickyRoundRobinLimit: numLimit }));
+      }
+    } catch (err) {
+      console.error("Failed to update combo sticky limit:", err);
+    }
+  };
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `            {/* Combo Round Robin */}
+            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm sm:text-base">Combo Round Robin</p>
+                <p className="text-xs sm:text-sm text-text-muted">
+                  Cycle through providers in combos instead of always starting with first
+                </p>
+              </div>
+              <Toggle
+                checked={settings.comboStrategy === "round-robin"}
+                onChange={() => updateComboStrategy(settings.comboStrategy === "round-robin" ? "fallback" : "round-robin")}
+                disabled={loading}
+              />
+            </div>
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `            {/* Combo Sticky Round Robin Limit */}
+            {settings.comboStrategy === "round-robin" && (
+              <div className="flex items-center justify-between pt-2 border-t border-border/50">
+                <div>
+                  <p className="font-medium">Combo Sticky Limit</p>
+                  <p className="text-sm text-text-muted">
+                    Calls per combo model before switching
+                  </p>
+                </div>
+                <Input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={settings.comboStickyRoundRobinLimit || 1}
+                  onChange={(e) => updateComboStickyLimit(e.target.value)}
+                  disabled={loading}
+                  className="w-20 text-center"
+                />
+              </div>
+            )}
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/profile/page.js",
+      find: `              {settings.comboStrategy === "round-robin"
+                ? \` Combos rotate after \${settings.comboStickyRoundRobinLimit || 1} call\${(settings.comboStickyRoundRobinLimit || 1) === 1 ? "" : "s"} per model.\`
+                : " Combos always start with their first model."}
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/ModelSelectModal.js",
+      find: `// but the frontend omitted it, hiding Zed entirely from the Combo picker.`,
+      replace: `// but the frontend omitted it, hiding Zed entirely from the model picker.`,
+      check: `// but the frontend omitted it, hiding Zed entirely from the model picker.`,
+    },
+    {
+      file: "src/shared/components/ModelSelectModal.js",
+      find: `  const [combos, setCombos] = useState([]);\n`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/ModelSelectModal.js",
+      find: `  const fetchCombos = async () => {
+    try {
+      const res = await fetch("/api/combos");
+      if (!res.ok) throw new Error(\`Failed to fetch combos: \${res.status}\`);
+      const data = await res.json();
+      setCombos(data.combos || []);
+    } catch (error) {
+      console.error("Error fetching combos:", error);
+      setCombos([]);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) fetchCombos();
+  }, [isOpen]);
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/ModelSelectModal.js",
+      find: `  // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
+  const filteredCombos = useMemo(() => {
+    if (kindFilter || capFilter) return [];
+    if (parsedQuery.isEmpty) return combos;
+    return combos.filter(c => matchesSearch(c.name, parsedQuery));
+  }, [combos, parsedQuery, kindFilter, capFilter]);
+
+`,
+      replace: "",
+      checkAbsent: true,
+    },
+    {
+      file: "src/shared/components/ModelSelectModal.js",
+      find: `        {/* Combos section - always first */}`,
+      cutTo: `        {/* Provider models */}`,
+    },
+    {
+      file: "src/shared/components/ModelSelectModal.js",
+      find: `      {Object.keys(filteredGroups).length === 0 && filteredCombos.length === 0 && (`,
+      replace: `      {Object.keys(filteredGroups).length === 0 && (`,
+      check: `      {Object.keys(filteredGroups).length === 0 && (`,
+    },
+    {
+      file: "src/shared/utils/modelSearchFilter.js",
+      find: ` * Filter an array of model or combo objects by a search query.`,
+      replace: ` * Filter an array of model objects by a search query.`,
+      check: ` * Filter an array of model objects by a search query.`,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/endpoint/components/KeyAccessControls.js",
+      find: `// Per-API-key access control on the Endpoint page.
+// "Restrict access" toggle per key; when on, the key may call only the listed
+// combos/models, shown as removable badges. Entries are picked with the same
+// shared ModelSelectModal the combo editor uses (combos first, then models).`,
+      replace: `// Per-API-key access control on the Endpoint page.
+// "Restrict access" toggle per key; when on, the key may call only the listed
+// models, shown as removable badges (picked with the shared ModelSelectModal).`,
+      check: `// models, shown as removable badges (picked with the shared ModelSelectModal).`,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/endpoint/components/KeyAccessControls.js",
+      find: `    // Same sources the combo editor feeds the picker with.`,
+      replace: `    // Same sources the ModelSelectModal expects (providers + aliases).`,
+      check: `    // Same sources the ModelSelectModal expects (providers + aliases).`,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/endpoint/components/KeyAccessControls.js",
+      find: `<span className="text-xs text-orange-500">No combos or models allowed — this key can call nothing.</span>`,
+      replace: `<span className="text-xs text-orange-500">No models allowed — this key can call nothing.</span>`,
+      check: `<span className="text-xs text-orange-500">No models allowed — this key can call nothing.</span>`,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/endpoint/components/KeyAccessControls.js",
+      find: `            Add combo or model`,
+      replace: `            Add model`,
+      check: `            Add model`,
+    },
+    {
+      file: "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.js",
+      find: `It will only be able to call the combos and models you add. Until you add one, it can call nothing.`,
+      replace: `It will only be able to call the models you add. Until you add one, it can call nothing.`,
+      check: `It will only be able to call the models you add. Until you add one, it can call nothing.`,
+    },
+    {
+      file: "src/lib/usageStats.js",
+      find: `// Combo seats reference models as "oc/<slug>"; keep just the slug so combo
+// failures line up with the token rows written by the chat core.`,
+      replace: `// Provider-prefixed ids arrive as "oc/<slug>"; keep just the slug so failure
+// rows line up with the token rows written by the chat core.`,
+      check: `// Provider-prefixed ids arrive as "oc/<slug>"; keep just the slug so failure`,
+    },
+
+    // ── stale comments that described combo routing
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `  // Claude Code marks a 1M-context request as \`<model>[1m]\`; the marker matches
+  // no combo, alias or provider/model pair, so it must not reach resolution.`,
+      replace: `  // Claude Code marks a 1M-context request as \`<model>[1m]\`; the marker matches
+  // no alias or provider/model pair, so it must not reach resolution.`,
+      check: `  // no alias or provider/model pair, so it must not reach resolution.`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `  // Per-key access control: a restricted key may call only its listed combos and
+  // models. Checked once on the requested target, before bypass, combo expansion
+  // and any credential lookup; an allowed combo grants the members it routes to.`,
+      replace: `  // Per-key access control: a restricted key may call only the models in its
+  // allow list. Checked once on the requested target, before bypass and any
+  // credential lookup.`,
+      check: `  // allow list. Checked once on the requested target, before bypass and any`,
+    },
+    {
+      file: "src/sse/services/keyAccess.js",
+      find: ` * Gate for endpoints whose \`model\` may be a combo or a model (chat, image, tts).
+ * Call with the requested string BEFORE combo expansion.`,
+      replace: ` * Gate for endpoints whose \`model\` is a chat/embedding model (chat, image, tts).
+ * Call with the requested string before any credential lookup.`,
+      check: ` * Call with the requested string before any credential lookup.`,
+    },
+    {
+      file: "src/shared/components/ModelSelectModal.js",
+      find: `      // while still being valid chat/combo targets.`,
+      replace: `      // while still being valid chat targets.`,
+      check: `      // while still being valid chat targets.`,
     },
   ],
 };

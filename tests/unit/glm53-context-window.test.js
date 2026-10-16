@@ -7,10 +7,9 @@ import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.j
 // line was 200k), and it runs ABOVE the `*glm-5*` catch-all — so it, not the
 // catch-all, was what every 5.3 id actually resolved to.
 //
-// The context window is not cosmetic: capacityAdapter's
-// stripHistoryForContext() trims conversation history at 80% of it, so a 5x
-// under-count silently discarded history from conversations the model could
-// still hold.
+// The context window is not cosmetic: clients size their compaction window
+// from it, so a 5x under-count silently discards history from conversations
+// the model could still hold.
 
 const caps = (id, provider = "zai") => getCapabilitiesForModel(provider, id);
 

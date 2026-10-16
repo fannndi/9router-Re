@@ -3,7 +3,7 @@
 // generic patterns re-sizing these ids: `*step-*` said 128k, `*deepseek*`/
 // `*mimo*` said 1M for variants that are capped at 200k.
 import { describe, expect, it } from "vitest";
-import { getCapabilitiesForModel, aggregateComboCapabilities } from "../../open-sse/providers/capabilities.js";
+import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.js";
 
 const LIMITS = [
   ["step-5-preview-free", 1000000, 65536],
@@ -50,14 +50,5 @@ describe("OpenCode Free (Zen) limits", () => {
       maxOutput: 384000,
     });
     expect(getCapabilitiesForModel("opencode", "mimo-v2.6-flash").contextWindow).toBe(1048576);
-  });
-
-  it("free-autopilot's seats promise a 1M combo window", () => {
-    const combo = aggregateComboCapabilities([
-      "oc/step-5-preview-free",
-      "oc/space-bunny-free",
-      "oc/muse-spark-1.3-contributor-free",
-    ]);
-    expect(combo.contextWindow).toBe(1000000);
   });
 });

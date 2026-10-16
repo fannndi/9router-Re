@@ -29,8 +29,8 @@ export function normalizeProvider(provider) {
   return PROVIDER_ALIASES[raw] || raw;
 }
 
-// Combo seats reference models as "oc/<slug>"; keep just the slug so combo
-// failures line up with the token rows written by the chat core.
+// Provider-prefixed ids arrive as "oc/<slug>"; keep just the slug so failure
+// rows line up with the token rows written by the chat core.
 export function normalizeModel(model) {
   const raw = String(model || "unknown");
   return raw.split("/").pop() || raw;

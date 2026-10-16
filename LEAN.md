@@ -2,7 +2,7 @@
 
 This is a **slim fork** of [decolua/9router](https://github.com/decolua/9router) for one
 job: serving **OpenCode Free** models through a **two-IP failover pool** so free-tier rate
-limits survive longer, with **combos** on top.
+limits survive longer. One model per request — no combos.
 
 Everything else was removed on purpose. The strip is **scripted** so upstream changes stay
 cheap to absorb:
@@ -26,7 +26,6 @@ Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-s
 | OpenCode Free provider (no-auth, fingerprint headers, reasoning echo, per-model `targetFormat`) | `open-sse/providers/registry/opencode.js`, `open-sse/executors/opencode.js` |
 | **Proxy-pool failover on 429/5xx** (direct → mobile pool, per-model cooldowns) | `src/lib/network/connectionProxy.js`, `src/sse/services/auth.js`, `src/sse/handlers/chat.js` |
 | Proxy Pools dashboard + API | `/dashboard/proxy-pools`, `/api/proxy-pools/*` |
-| Combos (round-robin / fallback / fusion) + **vision adapter only** | `open-sse/services/combo.js`, `open-sse/services/capacityAdapter.js` |
 | API keys, provider connections, dashboard password login | `/dashboard/endpoint`, `/api/keys`, `/api/providers` |
 | Console Log (live server output, **with per-request pool attribution**) | `/dashboard/console-log`, `/api/console-log*` |
 | Usage page (attempt-level pool/token stats, fail rates per model) | `/dashboard/pool-usage`, `/api/usage-stats`, `src/lib/usageStats.js` |
@@ -51,6 +50,7 @@ aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog sync.
 | `providers` | 137 provider registries, ~28 executors, all OAuth flows/services, background token refresh | keep only OpenCode Free |
 | `cosmetics` | docs sites, deploy manifests, npm `cli/`, Skills, Translator, pricing page, promos, sql.js fallback | dead weight |
 | `sweep` | see below | maximal pass: cruft + everything the earlier phases left behind |
+| `no-combo` | Combos (routing/fusion routes, UI, DB table) and the Capacity/Vision adapter | one model per request — predictable output; the `combos` table is dropped by migration 002 |
 
 ### The `sweep` phase (maximal pass)
 
@@ -71,7 +71,7 @@ aliases/tags, `ENABLE_REQUEST_LOGS` file logging, daily models.dev catalog sync.
 |---|---|
 | Console Log works again | routes restored at `/api/console-log` + `/api/console-log/stream` (the cosmetics phase deleted the old `/api/translator/console-logs` tree; the page kept calling it → 404). Client paths patched. |
 | Pool names in the logs | `▶ POST … · POOL:"Mobile (phone tether)" (2/3) · ACC:Public` per attempt, `[PROXY] … pool="Local (host)" (727afab5) | url=…`, `⇄ POOL:"direct" UNAVAILABLE (429) → NEXT POOL "Local (host)"`, and `✔ POOL:"…" served the request after N failed attempt(s)` |
-| One chain per upstream call | `buildPoolPlan(provider)` runs once per chat-handler invocation in `src/sse/handlers/chat.js` (a combo model attempt counts as one, so a fallback uses the other pool), then the loop walks the chain. Failover = `[direct, …pools]`; round-robin/random = pools with the start rotated per call; a failed pool falls through to the next entry in the same call (bounded — no loop). |
+| One chain per upstream call | `buildPoolPlan(provider)` runs once per chat-handler invocation in `src/sse/handlers/chat.js` (one chain per upstream call, so a pool retry uses the other pool), then the loop walks the chain. Failover = `[direct, …pools]`; round-robin/random = pools with the start rotated per call; a failed pool falls through to the next entry in the same call (bounded — no loop). |
 | Ordered chains | Provider strategy `proxyPoolId: "__all__"` ("All active pools (ordered)" in the card) makes the failover chain include every active pool sorted by `failoverOrder` (default 100), then `createdAt`. |
 | `failoverOrder` field | Proxy Pools add/edit form + `#n` badge; stored in the pool's JSON `data` column → **no DB migration**. |
 | Check setup | `/api/proxy-pools/[id]/diagnose` (read-only, **no sudo**): pool active → proxy reachable → **exit IP direct vs via proxy** → (mobile pool) tether iface, `ip rule` table 100, phone gateway, local proxy service. UI shows a checklist + a copy button for the setup command. |
@@ -84,8 +84,8 @@ was deleted by another phase is now skipped instead of raising "patch target mis
 
 | Feature | Detail |
 |---|---|
-| One row per upstream call | `usageHistory` (existing table, **no migration**) gets a row per attempt: ok rows carry `promptTokens`/`completionTokens` + `tokens:{in,cached,out}` and `meta:{pool,poolKey}`; fail rows carry `meta:{pool,reason}` (`429`, `5xx`, `transport`, `empty`). Rows older than 90 days are pruned (throttled). Legacy rows imported before the fork (empty `meta`) are left alone; delete them once after enabling the feature if you want a clean first view. |
-| Recorder | `src/lib/usageStats.js` (normalises every upstream usage shape, fire-and-forget, never throws) + `src/lib/db/repos/usageStatsRepo.js` (SQL). Hooks: `saveUsageStats()` (token rows; pool via `clientRawRequest._poolName`, set per attempt in `src/sse/handlers/chat.js`), the chat loop's `!result.success` branch (fail rows) and `open-sse/services/combo.js` (zero-content seats → reason `empty`). |
+| One row per upstream call | `usageHistory` (existing table, **no migration**) gets a row per attempt: ok rows carry `promptTokens`/`completionTokens` + `tokens:{in,cached,out}` and `meta:{pool,poolKey}`; fail rows carry `meta:{pool,reason}` (`429`, `5xx`, `transport`). Rows older than 90 days are pruned (throttled). Legacy rows imported before the fork (empty `meta`) are left alone; delete them once after enabling the feature if you want a clean first view. |
+| Recorder | `src/lib/usageStats.js` (normalises every upstream usage shape, fire-and-forget, never throws) + `src/lib/db/repos/usageStatsRepo.js` (SQL). Hooks: `saveUsageStats()` (token rows; pool via `clientRawRequest._poolName`, set per attempt in `src/sse/handlers/chat.js`), and the chat loop's `!result.success` branch (fail rows). |
 | API | `GET /api/usage-stats?range=today|24h|7d|30d|60d` → totals, pool slices (ok attempts by pool + one `Fail` bucket), per-model stats with fail rates/reasons, latest 30 attempts. |
 | Page | `/dashboard/pool-usage` (sidebar **Usage**, added by this phase): 4 stat cards (requests with served/failed hint, input, cached, output — no dollars), SVG donut (Local / Mobile / Fail %, `direct` appears only in failover mode) with legend, recent-requests table (model · pool · in/cached/out · status) and a sortable per-model table. **No new dependencies** (hand-rolled SVG donut, no recharts). |
 | Paths | The page/API deliberately sit outside `usage-quota`'s delete list (`/dashboard/pool-usage`, `/api/usage-stats`) so `verify all` stays green; the recorder files are plain additions, like the `pool-obs` console-log routes. |
@@ -106,8 +106,8 @@ models.dev values (checked 2026-10-16, flags kept exactly as the patterns resolv
 | `mimo-v2.6-flash-free` | 200,000 / 32,000 |
 | `deepseek-v4.1-flash-free` | 200,000 / 32,000 |
 
-With that, `free-autopilot` (step-5 + space-bunny + muse-spark-1.3) publishes a **1M** combo
-window and `max_completion_tokens` 65,536.
+With that, `step-5-preview-free` publishes a **1M** window with `max_completion_tokens`
+65,536, and every other free id its own real numbers.
 
 The same phase makes `/v1/models` actually emit those numbers: in this fork the DB holds no
 provider rows (OpenCode Free is a virtual no-auth connection), so the route used to take its
@@ -135,6 +135,31 @@ still only writes deltas above 10%.
 `mobile-pool/refresh-opencode-models.mjs` re-syncs the client `models` block from
 `/v1/models`: keeps existing keys/names, adds new models, drops retired ones, refreshes
 `limit`, and writes a `.bak` before touching a file.
+
+### The `no-combo` phase (per-model routing only)
+
+Combos (fallback / round-robin / **fusion**) and the Capacity/Vision Adapter are gone: one
+request routes to exactly one model, so the output quality stays predictable instead of
+mixing models that merely share a context size. What the phase does:
+
+- **Code**: `open-sse/services/combo.js`, `open-sse/services/capacityAdapter.js`, the
+  `/api/combos` routes, the `combos` dashboard page + `ComboFormModal`, `combosRepo`, the
+  combo clauses in `chat.js` / `model.js` / `keyAccess.js` / `/v1/models`,
+  `aggregateComboCapabilities`, the `comboStrategy*` / `capacityAdapter` settings + UI, and
+  the combo rows in the model picker are all removed.
+- **Data**: `combos` is gone from `schema.js` (`SCHEMA_VERSION` → 3, so the next boot takes
+  the pre-change backup) and migration **`002-drop-combos`** `DROP TABLE`s it on existing
+  DBs; the legacy-JSON import no longer inserts it.
+- **Client**: `refresh-opencode-models.mjs` lists `oc/*` only, so the next run drops
+  `free-autopilot` from `opencode.jsonc`; there is no default `model` anymore — pick per chat.
+
+Vision **capability** per model stays (the translator's `modality` handling is untouched):
+a VL model still accepts images; sending one to a text-only model now fails upstream instead
+of being silently rerouted. The proxy-pool round-robin (the long-session part) is unaffected.
+
+> Rebase note: `002-drop-combos.js` follows upstream's `001-initial`. If upstream ships its
+> own `002`, renumber ours (and its entry in `migrations/index.js`) so `latestVersion()`
+> stays monotonic.
 
 **Overlays.** Ten files are deliberate fork rewrites rather than edits, so they live in
 full under `scripts/lean/overlays/` and the phase copies them over verbatim:
@@ -188,14 +213,14 @@ file to `scripts/lean/overlays/` if the fork owns it outright. Re-run `verify`/`
 - `node scripts/lean.mjs audit && node scripts/lean.mjs verify all`
 - `npm run build` → compiles, static pages generated.
 - `(cd tests && npx vitest run)` → all green (~760 tests; `real/` suites skip without `RUN_REAL=1`).
-- `curl -s localhost:20128/v1/models` → the combo + `oc/*` models only.
+- `curl -s localhost:20128/v1/models` → the `oc/*` models only (no combo entries, no `union-alpha`).
 - Pool attribution: send one chat, then check Console Log for `POOL:"…"` on the request line
   and `[PROXY] … pool="…"` (round-robin alternates the start pool per request; failover walks
   `direct → pools` on 429).
 - Check setup: Proxy Pools → row button → every check green (mobile) / exit-IP warn is expected
   for `Local (host)`.
-- Chat smoke through the combo:
-  `curl -s -X POST localhost:20128/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{"model":"free-autopilot","messages":[{"role":"user","content":"hi"}],"stream":false}'`
+- Chat smoke (pick a live id):
+  `curl -s -X POST localhost:20128/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{"model":"oc/space-bunny-free","messages":[{"role":"user","content":"hi"}],"stream":false}'`
 - 429 failover: `~/Gateway/mobile-pool/e2e-local.sh` (mock 429 → pool retry).
 - Dashboard: log in, walk the six pages, removed routes (`/dashboard/skills`, `/api/locale`, …) return 404.
 

@@ -2,8 +2,7 @@
 
 // Per-API-key access control on the Endpoint page.
 // "Restrict access" toggle per key; when on, the key may call only the listed
-// combos/models, shown as removable badges. Entries are picked with the same
-// shared ModelSelectModal the combo editor uses (combos first, then models).
+// models, shown as removable badges (picked with the shared ModelSelectModal).
 import { useState } from "react";
 import PropTypes from "prop-types";
 import { Toggle, ModelSelectModal } from "@/shared/components";
@@ -16,7 +15,7 @@ export default function KeyAccessControls({ apiKey, onChange, onRequestRestrict 
 
   const openPicker = async () => {
     setPickerOpen(true);
-    // Same sources the combo editor feeds the picker with.
+    // Same sources the ModelSelectModal expects (providers + aliases).
     try {
       const [providersRes, aliasRes] = await Promise.all([fetch("/api/providers"), fetch("/api/models/alias")]);
       if (providersRes.ok) setActiveProviders((await providersRes.json()).connections || []);
@@ -44,7 +43,7 @@ export default function KeyAccessControls({ apiKey, onChange, onRequestRestrict 
       {access.restricted && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {access.allow.length === 0 && (
-            <span className="text-xs text-orange-500">No combos or models allowed — this key can call nothing.</span>
+            <span className="text-xs text-orange-500">No models allowed — this key can call nothing.</span>
           )}
           {access.allow.map((entry) => (
             <span key={entry} className="flex items-center gap-1 rounded-xl border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-text-main">
@@ -64,7 +63,7 @@ export default function KeyAccessControls({ apiKey, onChange, onRequestRestrict 
             className="flex items-center gap-0.5 rounded-xl border border-dashed border-black/10 px-2 py-0.5 text-xs font-medium text-primary hover:border-primary/50 dark:border-white/10"
           >
             <span className="material-symbols-outlined leading-none" style={{ fontSize: "14px" }}>add</span>
-            Add combo or model
+            Add model
           </button>
         </div>
       )}

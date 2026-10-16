@@ -1,33 +1,25 @@
 // Per-API-key access control for the /v1/* inference keys.
 //
 // Two modes per key: UNRESTRICTED (default — exactly today's behaviour) or
-// RESTRICTED, where the key may call ONLY the combos and models in its allow
-// list. No wildcards, no deny mode. Matching is exact and case-insensitive, on
-// RESOLVED identities, so every spelling that routes to the same target is
-// treated the same and no spelling can route somewhere the list does not name:
+// RESTRICTED, where the key may call ONLY the models in its allow list. No
+// wildcards, no deny mode. Matching is exact and case-insensitive, on RESOLVED
+// identities, so every spelling that routes to the same target is treated the
+// same and no spelling can route somewhere the list does not name:
 //
-//   * a request that routes as a combo (getComboModels — the lookup routing
-//     itself uses) is allowed iff that combo's name is listed;
 //   * a request that routes to a model is allowed iff its resolved
 //     `providerId/model` equals the resolved `providerId/model` of a listed
 //     model entry. So `cx/gpt-5`, `codex/gpt-5` and an alias that points there
 //     are one target; a raw string that merely looks like a listed entry but
-//     routes elsewhere (e.g. `MAIN` when the combo is `Main`, which routes to
-//     `openai/MAIN`) is not;
+//     routes elsewhere (e.g. `MAIN` as an alias of `openai/MAIN`) is not;
 //   * search/fetch (provider IS the model) are allowed iff the resolved
-//     provider id is listed, or the request is a listed combo.
+//     provider id is listed.
 //
-// An allowed combo grants its members when they are reached THROUGH that combo
-// (the check runs once, on the requested target, before combo expansion). It
-// does not grant calling a member directly by name — that needs its own entry.
 // The check runs before any credential lookup, so a denied request never
 // touches a provider account.
 import { getApiKeyByKey } from "@/lib/db/repos/apiKeysRepo.js";
-import { getCombos } from "@/lib/db/repos/combosRepo.js";
-import { getModelInfo, getComboModels } from "./model.js";
+import { getModelInfo } from "./model.js";
 import { resolveProviderId } from "@/shared/constants/providers.js";
 import {
-  KEY_ACCESS_COMBO_OWNER,
   KEY_ACCESS_PROVIDER_AS_MODEL_KINDS,
   keyAccessDeniedMessage,
 } from "@/shared/constants/keyAccess.js";
@@ -80,33 +72,26 @@ export async function getKeyAccessContext(request) {
   };
 }
 
-// Resolve the allow list once per request: combo names, resolved model ids,
-// and resolved provider ids (for provider-as-model kinds).
+// Resolve the allow list once per request: resolved model ids and resolved
+// provider ids (for provider-as-model kinds).
 async function getAllowSets(ctx) {
   if (ctx._sets) return ctx._sets;
-  const comboNames = new Set((await getCombos()).map((c) => lower(c.name)));
-  const combos = new Set();
   const models = new Set();
   const providers = new Set();
   for (const entry of ctx.allow) {
     const key = lower(entry);
-    if (comboNames.has(key)) {
-      combos.add(key);
-      continue;
-    }
     const info = await getModelInfo(entry);
     if (info?.provider && info.model) models.add(canonicalModel(info.provider, info.model));
     if (!entry.includes("/")) providers.add(lower(resolveProviderId(entry)));
   }
-  ctx._sets = { combos, models, providers };
+  ctx._sets = { models, providers };
   return ctx._sets;
 }
 
 async function isModelStringAllowed(ctx, requested) {
   const sets = await getAllowSets(ctx);
   const info = await getModelInfo(requested);
-  // provider null ⇔ an existing combo with no members (routes nowhere).
-  if (!info?.provider) return sets.combos.has(lower(requested));
+  if (!info?.provider) return false;
   return sets.models.has(canonicalModel(info.provider, info.model));
 }
 
@@ -116,18 +101,14 @@ export function keyAccessDeniedResponse(ctx, requested) {
 }
 
 /**
- * Gate for endpoints whose `model` may be a combo or a model (chat, image, tts).
- * Call with the requested string BEFORE combo expansion.
+ * Gate for endpoints whose `model` is a chat/embedding model (chat, image, tts).
+ * Call with the requested string before any credential lookup.
  * @returns {Promise<Response|null>} a 403 Response, or null when allowed.
  */
 export async function enforceKeyAccess(ctx, requested) {
   if (!ctx) return null;
   if (typeof requested !== "string" || !requested) return keyAccessDeniedResponse(ctx, String(requested ?? ""));
-  const sets = await getAllowSets(ctx);
-  const comboModels = await getComboModels(requested);
-  const allowed = comboModels
-    ? sets.combos.has(lower(requested))
-    : await isModelStringAllowed(ctx, requested);
+  const allowed = await isModelStringAllowed(ctx, requested);
   return allowed ? null : keyAccessDeniedResponse(ctx, requested);
 }
 
@@ -147,46 +128,21 @@ export async function enforceKeyAccessResolved(ctx, requested, provider, model) 
 
 /**
  * Gate for search/fetch, where the provider IS the model.
- * @param {string[]|null} comboModels - routing's own combo resolution for `requested`
  */
-export async function enforceKeyAccessProvider(ctx, requested, comboModels) {
+export async function enforceKeyAccessProvider(ctx, requested) {
   if (!ctx) return null;
   if (typeof requested !== "string" || !requested) return keyAccessDeniedResponse(ctx, String(requested ?? ""));
   const sets = await getAllowSets(ctx);
-  const allowed = comboModels
-    ? sets.combos.has(lower(requested))
-    : sets.providers.has(lower(resolveProviderId(requested)));
-  return allowed ? null : keyAccessDeniedResponse(ctx, requested);
+  return sets.providers.has(lower(resolveProviderId(requested))) ? null : keyAccessDeniedResponse(ctx, requested);
 }
 
-/**
- * Capacity-adapter models are appended by the gateway, not chosen by the
- * client. For a restricted key keep only the adapter models the key may call
- * directly; the original targets (already gated) are always kept. Dropping a
- * model just shortens the fallback list, so combo failover is unaffected.
- */
-export async function filterAdapterModels(ctx, augmented, original) {
-  if (!ctx || !Array.isArray(augmented)) return augmented;
-  const keep = new Set(original || []);
-  const out = [];
-  for (const m of augmented) {
-    if (keep.has(m) || await isModelStringAllowed(ctx, m)) out.push(m);
-    else log.info("AUTH", `key-access: key "${ctx.keyName}" skips adapter model "${m}" (not allowed)`);
-  }
-  return out;
-}
-
-/** /v1/models: a restricted key sees only the combos and models it may call. */
+/** /v1/models: a restricted key sees only the models it may call. */
 export async function filterModelsListForKey(ctx, list) {
   if (!ctx || !Array.isArray(list)) return list;
   const sets = await getAllowSets(ctx);
   const out = [];
   for (const entry of list) {
     if (!entry?.id) continue;
-    if (entry.owned_by === KEY_ACCESS_COMBO_OWNER) {
-      if (sets.combos.has(lower(entry.id))) out.push(entry);
-      continue;
-    }
     const info = await getModelInfo(entry.id);
     if (!info?.provider) continue;
     if (KEY_ACCESS_PROVIDER_AS_MODEL_KINDS.includes(entry.kind)) {

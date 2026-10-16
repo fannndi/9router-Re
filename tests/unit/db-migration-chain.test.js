@@ -35,7 +35,7 @@ describe("Schema migrations", () => {
     const tables = db.all(`SELECT name FROM sqlite_master WHERE type='table'`).map(t => t.name);
     expect(tables).toEqual(expect.arrayContaining([
       "_meta", "settings", "providerConnections", "providerNodes",
-      "proxyPools", "apiKeys", "combos", "kv", "usageHistory", "usageDaily", "requestDetails",
+      "proxyPools", "apiKeys", "kv", "usageHistory", "usageDaily", "requestDetails",
     ]));
   });
 
@@ -58,6 +58,29 @@ describe("Schema migrations", () => {
 
     const settings = db2.get(`SELECT data FROM settings WHERE id=1`);
     expect(JSON.parse(settings.data)).toEqual({ foo: "bar" });
+  });
+
+  it("old DB carrying the removed combos table → migration 002 drops it", async () => {
+    // 1st boot with current code, then simulate a legacy DB: the combos table
+    // still exists and schemaVersion is one below latest, so 002 is pending.
+    const { getAdapter } = await import("@/lib/db/driver.js");
+    const db = await getAdapter();
+    db.run(`CREATE TABLE IF NOT EXISTS combos (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT, models TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_combo_name ON combos(name)`);
+    db.run(`INSERT INTO combos(id, name, models, createdAt, updatedAt) VALUES('c1', 'free-autopilot', '[]', '2026-01-01', '2026-01-01')`);
+    db.run(`UPDATE _meta SET value = '1' WHERE key = 'schemaVersion'`);
+    db.close?.();
+
+    delete global._dbAdapter;
+    vi.resetModules();
+    const { getAdapter: getAdapter2 } = await import("@/lib/db/driver.js");
+    const { latestVersion } = await import("@/lib/db/migrations/index.js");
+    const db2 = await getAdapter2();
+    const row = db2.get(`SELECT value FROM _meta WHERE key='schemaVersion'`);
+    expect(parseInt(row.value, 10)).toBe(latestVersion());
+
+    const combos = db2.all(`SELECT name FROM sqlite_master WHERE type='table' AND name='combos'`);
+    expect(combos).toEqual([]);
   });
 
   it("fresh DB + legacy db.json → imports data automatically", async () => {

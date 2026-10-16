@@ -1,8 +1,8 @@
 # AGENTS.md — working in this repo
 
 Lean fork of [decolua/9router](https://github.com/decolua/9router). One job: serve
-**OpenCode Free** models through a **429 → proxy-pool failover** with **combos**, from
-`127.0.0.1:20128`, for the OpenCode CLI on this machine. `README.md` has the user-facing
+**OpenCode Free** models through a **429 → proxy-pool failover** — one model per request —
+from `127.0.0.1:20128`, for the OpenCode CLI on this machine. `README.md` has the user-facing
 story; `LEAN.md` has the keep/remove matrix and the rebase recipe.
 
 ## Prime rule: removals are scripted
@@ -39,9 +39,9 @@ On this machine Node is not on `PATH`: prefix commands with
 
 - `src/app/api/v1/*` + `src/app/api/v1beta/*` — client-facing API (OpenAI, Claude,
   Responses, Gemini, Ollama-compat).
-- `src/app/(dashboard)/*` — dashboard pages (Endpoint & Key, Providers, Combos, Proxy Pools,
+- `src/app/(dashboard)/*` — dashboard pages (Endpoint & Key, Providers, Proxy Pools,
   Console Log, Usage, Settings).
-- `src/sse/handlers/chat.js` — chat entry: combo iteration + the **pool chain loop**.
+- `src/sse/handlers/chat.js` — chat entry: single-model resolution + the **pool chain loop**.
   It builds one `buildPoolPlan()` per request and walks the chain on 429/5xx/transport
   failures (`failoverState.attempted`, `poolRetryAfterMs`).
 - `src/lib/network/connectionProxy.js` — pool resolution, ordered chains
@@ -53,8 +53,7 @@ On this machine Node is not on `PATH`: prefix commands with
 - `src/lib/usageStats.js` + `src/app/api/usage-stats/route.js` — fork-owned usage stats: one
   row per upstream call in `usageHistory` (tokens + serving pool; fail rows carry a reason),
   read by the **Usage** page (`/dashboard/pool-usage`). Hooks: `saveUsageStats()`
-  (requestDetail, token rows), the chat loop's `!result.success` branch and `combo.js`'s
-  zero-content branch.
+  (requestDetail, token rows) and the chat loop's `!result.success` branch.
 - `open-sse/providers/capabilities.js` — capability/limit tables. Zen free-tier limits are
   pinned here (`zen-caps` phase) because the generic patterns mis-size them; `/v1/models`
   publishes them through the per-provider loop (the synthetic no-auth connections count as
@@ -79,4 +78,4 @@ On this machine Node is not on `PATH`: prefix commands with
   `✔ POOL:"<b>" served the request after N failed attempt(s)`.
 - Docs are English. Keep `LEAN.md` in sync when a phase changes.
 - After any engine change run: `audit` → `verify all` → `npm run build` → `vitest` → restart
-  the service → smoke test `/v1/models` and a combo chat.
+  the service → smoke test `/v1/models` and a chat request.

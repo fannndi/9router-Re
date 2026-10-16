@@ -171,7 +171,7 @@ export function matchesSearch(target, queryOrParsed) {
 }
 
 /**
- * Filter an array of model or combo objects by a search query.
+ * Filter an array of model objects by a search query.
  * @param {Array} items
  * @param {string|ReturnType<typeof parseSearchQuery>} query
  * @returns {Array}

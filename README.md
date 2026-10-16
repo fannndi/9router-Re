@@ -8,9 +8,9 @@ A slimmed-down fork of [decolua/9router](https://github.com/decolua/9router) tha
    share of the free-tier limits and sessions last longer. A rate-limited pool falls through
    to the next one *inside the same request*, with per-model cooldowns that honour
    `Retry-After`. `Failover on 429` keeps the phone idle until a 429 (quota-saver variant).
-2. **Combos** — round-robin / fallback across free models so one model's limit does not end
-   the session. Combined with the two pools, each (model, IP) pair sees a fraction of the
-   traffic.
+2. **One model per request, chosen by you** — no model rotation layered on top of the pool
+   rotation, so the output quality stays predictable. The pools below still spread every
+   model's traffic across both IPs.
 3. **Usage page** — what the pools actually did: donut with `Pool Local` / `Pool Mobile` /
    `Fail` percentages, token totals (input / cached / output — **no dollars**), per-model
    fail rate + reasons, and the latest requests with the pool that carried them
@@ -29,7 +29,7 @@ scripted (`scripts/lean.mjs`) so `git rebase upstream/master` stays cheap — se
 OpenCode CLI / any OpenAI-compatible client
         │  POST /v1/chat/completions   (or /v1/messages, /v1/responses, /v1beta, /v1/api/chat)
         ▼
-  9Router  ── combo picks model ──► OpenCode Free upstream
+  9Router  ── single model (picked by you) ──► OpenCode Free upstream
         │        │
         │        └─ 429 / 5xx → retry same model through the next proxy-pool entry
         ▼                           (direct → mobile pool, per-model cooldown)
@@ -43,7 +43,6 @@ Kept surface:
 | OpenAI-compatible API (`/v1/chat/completions`, `/v1/models`, `/v1/messages`, `/v1/responses`, `/v1beta/...`, Ollama `/v1/api/chat` + `/api/tags`) | `src/app/api/v1/*` |
 | OpenCode Free provider (no-auth, fingerprint headers, reasoning echo, `targetFormat` per model) | `open-sse/providers/registry/opencode.js`, `open-sse/executors/opencode.js` |
 | 429 failover through proxy pools (direct first, per-model cooldown) | `src/lib/network/connectionProxy.js`, `src/sse/services/auth.js`, `src/sse/handlers/chat.js` |
-| Combos (round-robin / fallback / fusion) + vision adapter | `open-sse/services/combo.js`, `open-sse/services/capacityAdapter.js` |
 | Custom OpenAI/Anthropic-compatible endpoints (provider nodes) | `/dashboard/providers/new`, `open-sse/executors/default.js` |
 | API keys, dashboard password login, console log | `/dashboard/endpoint`, `/dashboard/console-log` |
 
@@ -102,23 +101,21 @@ in **Settings**).
 ## Client config (OpenCode)
 
 Copy `../mobile-pool/opencode.jsonc` into a workspace and replace the key placeholder with a
-key from **Endpoint & Key**. `free-autopilot` is the combo (round-robin across the free
-models); every individual `oc/*` model is listed too. Each entry pins its real window via
-`limit: { context, output }` (Zen free-tier values — `free-autopilot` is 1M) because OpenCode
+key from **Endpoint & Key**. Every free `oc/*` model the gateway serves is listed. Each entry
+pins its real window via `limit: { context, output }` (Zen free-tier values) because OpenCode
 falls back to its own `200k/32k` default for models that omit it. The list mirrors the
 gateway's live `/v1/models` — retired ids disappear, new Zen free models appear — and can be
 re-synced any time with `node ../mobile-pool/refresh-opencode-models.mjs`.
 
 ```jsonc
 {
-  "provider": {
+  "providers": {
     "9router": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:20128/v1", "apiKey": "<key from Endpoint & Key>" },
-      "models": { "free-autopilot": { "name": "Free Autopilot (combo)" } }
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:20128/v1", "apiKey": "<key from Endpoint & Key>" },
+      "models": { "oc-step-5-preview-free": { "name": "Step 5 (free)" } }
     }
-  },
-  "model": "9router/free-autopilot"
+  }
 }
 ```
 
@@ -128,11 +125,10 @@ re-synced any time with `node ../mobile-pool/refresh-opencode-models.mjs`.
 |---|---|
 | **Endpoint & Key** | the API base URL + key management (`require API key`, restrictions) |
 | **Providers** | OpenCode Free status + custom OpenAI/Anthropic-compatible endpoints |
-| **Combos** | `free-autopilot` membership, strategy (fallback / round-robin / fusion) and the vision adapter |
-| **Provider strategy** (Providers → OpenCode Free) | `Round-robin` (default here): the start pool alternates on every upstream call (each combo model attempt counts), a rate-limited pool falls through to the next, so both IPs share the free limits. `Failover on 429`: direct first, pools only on 429 (phone data stays idle until needed). `Random`: same as round-robin with a random start. |
+| **Provider strategy** (Providers → OpenCode Free) | `Round-robin` (default here): the start pool alternates on every upstream call, a rate-limited pool falls through to the next, so both IPs share the free limits. `Failover on 429`: direct first, pools only on 429 (phone data stays idle until needed). `Random`: same as round-robin with a random start. |
 | **Proxy Pools** | pool entries with a **Failover order** (`Local (host)` → `127.0.0.1:8899`, `Mobile (phone tether)` → `127.0.0.1:8888`), plus the row **Check setup** button that verifies tether / policy route / proxy / exit IP without sudo |
 | **Console Log** | live server output with per-request pool attribution: `▶ … POOL:"Mobile (phone tether)" (2/2)`, `[PROXY] … pool="…" | url=…`, `⇄ POOL:"direct" UNAVAILABLE (429) → NEXT POOL "…"` |
-| **Usage** | attempt-level stats with **pool attribution** (one row per upstream call, incl. combo fallbacks): donut `Pool Local` / `Pool Mobile` / `Fail` in %, totals (requests · input · cached · output tokens, no dollars), per-model fail rate + fail reasons, latest requests with their pool. Ranges: Today / 24h / 7D / 30D / 60D; data is pruned after 90 days. |
+| **Usage** | attempt-level stats with **pool attribution** (one row per upstream call, incl. pool retries): donut `Pool Local` / `Pool Mobile` / `Fail` in %, totals (requests · input · cached · output tokens, no dollars), per-model fail rate + fail reasons, latest requests with their pool. Ranges: Today / 24h / 7D / 30D / 60D; data is pruned after 90 days. |
 | **Settings** | password/login, routing strategy, outbound proxy, observability toggle, backup |
 
 ## Environment

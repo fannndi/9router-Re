@@ -34,12 +34,6 @@ export {
   getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
 } from "./repos/apiKeysRepo.js";
 
-// Combos
-export {
-  getCombos, getComboById, getComboByName,
-  createCombo, updateCombo, deleteCombo,
-} from "./repos/combosRepo.js";
-
 // Aliases (model + custom + mitm)
 export {
   getModelAliases, setModelAlias, deleteModelAlias,
@@ -68,7 +62,6 @@ export async function exportDb() {
     providerNodes: db.all(`SELECT * FROM providerNodes`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     proxyPools: db.all(`SELECT * FROM proxyPools`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     apiKeys: db.all(`SELECT * FROM apiKeys`).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, createdAt: r.createdAt, access: keyAccessFromColumns(r.accessRestricted, r.accessAllow) })),
-    combos: db.all(`SELECT * FROM combos`).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
     mitmAlias: {},
@@ -96,7 +89,6 @@ export async function importDb(payload) {
     db.run(`DELETE FROM providerNodes`);
     db.run(`DELETE FROM proxyPools`);
     db.run(`DELETE FROM apiKeys`);
-    db.run(`DELETE FROM combos`);
     db.run(`DELETE FROM kv WHERE scope IN ('modelAliases', 'customModels', 'mitmAlias', 'pricing')`);
 
     // Settings
@@ -138,12 +130,6 @@ export async function importDb(payload) {
       db.run(
         `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, createdAt, accessRestricted, accessAllow) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
         [k.id, k.key, k.name || null, k.machineId || null, k.isActive === false ? 0 : 1, k.createdAt || new Date().toISOString(), cols.accessRestricted, cols.accessAllow]
-      );
-    }
-    for (const c of payload.combos || []) {
-      db.run(
-        `INSERT OR REPLACE INTO combos(id, name, kind, models, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-        [c.id, c.name, c.kind || null, stringifyJson(c.models || []), c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
       );
     }
     for (const [a, m] of Object.entries(payload.modelAliases || {})) {

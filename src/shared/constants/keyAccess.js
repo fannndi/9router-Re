@@ -14,9 +14,6 @@ export const KEY_ACCESS_UNRESTRICTED = Object.freeze({ restricted: false, allow:
 // /v1/models entry kinds whose "model" is the provider itself (search/fetch).
 export const KEY_ACCESS_PROVIDER_AS_MODEL_KINDS = Object.freeze(["webSearch", "webFetch"]);
 
-// /v1/models owner tag for combo entries.
-export const KEY_ACCESS_COMBO_OWNER = "combo";
-
 // Client-facing 403 message. Names only what the client itself sent: never the
 // key name or the key's allow list.
 export function keyAccessDeniedMessage(requested) {

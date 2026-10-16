@@ -43,13 +43,6 @@ const getPageInfo = (pathname) => {
       icon: "dns",
       breadcrumbs: [],
     };
-  if (pathname.includes("/combos"))
-    return {
-      title: "Combos",
-      description: "Model combos with fallback",
-      icon: "layers",
-      breadcrumbs: [],
-    };
   if (pathname.includes("/auth-files"))
     return {
       title: "Auth Files",

@@ -6,12 +6,6 @@ const DEFAULT_SETTINGS = {
   stickyRoundRobinLimit: 3,
   providerStrategies: {},
   quotaVisibility: {},
-  comboStrategy: "fallback",
-  comboStickyRoundRobinLimit: 1,
-  comboStrategies: {},
-  capacityAdapter: {
-    vision: { enabled: true, roundRobin: false, models: [] },
-  },
   requireLogin: true,
   requireApiKey: true,
   authMode: "password",
@@ -58,16 +52,6 @@ export function mergeWithDefaults(raw) {
         merged[key] = true;
       } else {
         merged[key] = defVal;
-      }
-    }
-  }
-  if (merged.capacityAdapter && typeof merged.capacityAdapter === "object") {
-    for (const capKey of Object.keys(merged.capacityAdapter)) {
-      const entry = merged.capacityAdapter[capKey];
-      if (Array.isArray(entry?.models)) {
-        entry.models = entry.models.map((m) =>
-          m === "oc/mimo-v2.5-free" ? "oc/mimo-v2.6-flash-free" : m
-        );
       }
     }
   }

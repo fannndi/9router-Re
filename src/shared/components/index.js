@@ -15,7 +15,6 @@ export { default as Header } from "./Header";
 export { default as Footer } from "./Footer";
 export { default as ModelSelectModal } from "./ModelSelectModal";
 export { default as ManualConfigModal } from "./ManualConfigModal";
-export { default as ComboFormModal } from "./ComboFormModal";
 export { default as HeaderMenu } from "./HeaderMenu";
 export { default as EditConnectionModal } from "./EditConnectionModal";
 export { default as AddCustomEmbeddingModal } from "./AddCustomEmbeddingModal";
