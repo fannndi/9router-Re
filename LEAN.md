@@ -102,7 +102,7 @@ models.dev values (checked 2026-10-16, flags kept exactly as the patterns resolv
 | `step-5-preview-free` | 1,000,000 / 65,536 |
 | `nemotron-3.5-super-vl-free` | 1,048,576 / 131,072 |
 | `nemotron-3.5-lightning-free` | 262,144 / 262,144 |
-| `cat-jam-free` | 262,144 / 131,072 |
+| `cat-jam-free` | 1,048,576 / 131,072 (models.dev corrected it; the sync picks such changes up automatically) |
 | `mimo-v2.6-flash-free` | 200,000 / 32,000 |
 | `deepseek-v4.1-flash-free` | 200,000 / 32,000 |
 
@@ -118,6 +118,23 @@ routes the models through the full per-provider loop instead.
 Note: the client (OpenCode CLI/Desktop) does **not** read limits from `/v1/models` for
 custom providers — it defaults to `{ context: 200000, output: 32000 }` when a model entry
 has no `limit`. `mobile-pool/opencode.jsonc` therefore pins `limit` per model.
+
+**The list itself is live.** Zen rotates its free models (union-alpha retired, jev-1.13-free
+appeared, step-5-preview-free was missing from one live spot check and returned later), so the
+registry rows and dashboard-added custom models go stale. `src/lib/modelCatalog/liveModels.js`
+fetches the provider's `modelsFetcher` list (cached 10 min, last-good fallback) and
+`getModelReality()` combines it with the models.dev copy (`model-catalog-raw.json`):
+`/v1/models` and `/api/models` hide ids gone from both, surface live-only ids, and keep ids
+that are only temporarily missing from live (step-5 survives via models.dev). A failed fetch
+leaves the listing untouched.
+
+The daily models.dev sync now also covers the live + raw-catalog ids (`collectEntries`), so
+limits for every servable id refresh themselves instead of staying hand-pinned — the sync
+still only writes deltas above 10%.
+
+`mobile-pool/refresh-opencode-models.mjs` re-syncs the client `models` block from
+`/v1/models`: keeps existing keys/names, adds new models, drops retired ones, refreshes
+`limit`, and writes a `.bak` before touching a file.
 
 **Overlays.** Ten files are deliberate fork rewrites rather than edits, so they live in
 full under `scripts/lean/overlays/` and the phase copies them over verbatim:

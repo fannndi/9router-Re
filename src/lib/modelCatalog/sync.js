@@ -169,15 +169,33 @@ async function collectEntries() {
   setCatalogSource(null);
 
   const entries = [];
+  const seen = new Set();
+  const addEntry = (provider, model, contextLength) => {
+    const key = `${provider}|${model}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({
+      provider,
+      model,
+      contextLength,
+      current: getCapabilitiesForModel(provider, model),
+    });
+  };
   for (const provider of registry) {
     for (const model of provider.models || []) {
-      entries.push({
-        provider: provider.id,
-        model: model.id,
-        contextLength: model.contextLength,
-        current: getCapabilitiesForModel(provider.id, model.id),
-      });
+      addEntry(provider.id, model.id, model.contextLength);
     }
+  }
+  // zen-caps: providers that own their catalogue upstream (modelsFetcher) only
+  // name a few models in the registry. Include the live list and the models.dev
+  // copy so every servable id gets its delta evaluated — otherwise those limits
+  // never refresh and stay hand-pinned forever.
+  const { getLiveModelIds, getCatalogRawModelIds } = await import("./liveModels.js");
+  for (const provider of registry) {
+    if (!provider.modelsFetcher) continue;
+    const live = (await getLiveModelIds(provider.id, { ttlMs: 0 })) || [];
+    const ids = new Set([...live, ...getCatalogRawModelIds(provider.id, { freeOnly: true })]);
+    for (const id of ids) addEntry(provider.id, id, undefined);
   }
   return entries;
 }

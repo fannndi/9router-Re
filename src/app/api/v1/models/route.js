@@ -11,6 +11,7 @@ import { getProviderConnections, getCombos, getCustomModels, getModelAliases } f
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
 
 // Combo seats use UI aliases; the model registry also has transport aliases.
 // Capability overrides and catalog limits are keyed by provider id.
@@ -412,7 +413,19 @@ export async function buildModelsList(kindFilter, options = {}) {
 
       const mergedModelIds = Array.from(new Set([...modelIds, ...customModelIds, ...aliasModelIds]));
 
-      for (const modelId of mergedModelIds) {
+      // zen-caps: the upstream owns this catalogue (modelsFetcher). Hide ids it
+      // no longer lists (union-alpha was retired) and surface new live free ids
+      // without dashboard clicks (jev-1.13-free), while the models.dev copy keeps
+      // ids that are only temporarily missing from the live list (step-5).
+      const reality = await getModelReality(providerId);
+      const listedModelIds = reality
+        ? [
+            ...mergedModelIds.filter((id) => reality.alive.has(id)),
+            ...reality.live.filter((id) => !mergedModelIds.includes(id)),
+          ]
+        : mergedModelIds;
+
+      for (const modelId of listedModelIds) {
         // Resolve kind: prefer custom/live metadata, then static, then ID heuristics.
         const customKind = customModelKindById.get(modelId);
         const liveKind = liveModelKindById.get(modelId);

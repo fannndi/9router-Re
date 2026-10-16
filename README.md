@@ -103,9 +103,11 @@ in **Settings**).
 
 Copy `../mobile-pool/opencode.jsonc` into a workspace and replace the key placeholder with a
 key from **Endpoint & Key**. `free-autopilot` is the combo (round-robin across the free
-models); the individual `oc/*` models are also listed. Every entry pins its real window via
+models); every individual `oc/*` model is listed too. Each entry pins its real window via
 `limit: { context, output }` (Zen free-tier values — `free-autopilot` is 1M) because OpenCode
-falls back to its own `200k/32k` default for models that omit it.
+falls back to its own `200k/32k` default for models that omit it. The list mirrors the
+gateway's live `/v1/models` — retired ids disappear, new Zen free models appear — and can be
+re-synced any time with `node ../mobile-pool/refresh-opencode-models.mjs`.
 
 ```jsonc
 {

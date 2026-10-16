@@ -191,7 +191,7 @@ export const MODEL_CAPABILITIES = {
   "step-5-preview-free":          { reasoning: true, thinkingFormat: "step", contextWindow: 1000000, maxOutput: 65536 },
   "nemotron-3.5-super-vl-free":   { vision: true, reasoning: true, contextWindow: 1048576, maxOutput: 131072 },
   "nemotron-3.5-lightning-free":  { reasoning: true, contextWindow: 262144, maxOutput: 262144 },
-  "cat-jam-free":                 { contextWindow: 262144, maxOutput: 131072 },
+  "cat-jam-free":                 { contextWindow: 1048576, maxOutput: 131072 },
   "mimo-v2.6-flash-free":         { vision: true, audioInput: true, videoInput: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 32000 },
   "deepseek-v4.1-flash-free":     { vision: true, reasoning: true, thinkingFormat: "deepseek", thinkingEffortSupported: true, contextWindow: 200000, maxOutput: 32000 },
   "exo-free":          { vision: true, reasoning: true, thinkingFormat: "openai", contextWindow: 1048576, maxOutput: 131072 },

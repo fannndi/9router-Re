@@ -4,6 +4,7 @@ import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { AI_MODELS } from "@/shared/constants/config";
 import { getProviderAlias, ALIAS_TO_ID } from "@/shared/constants/providers";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
 
 // GET /api/models - Get models with aliases
 export async function GET() {
@@ -73,6 +74,28 @@ export async function GET() {
           ...(m.caps || {}),
         },
       });
+    }
+
+    // zen-caps: upstream-owned catalogue — hide retired ids (union-alpha) and
+    // surface new live free ids so the dashboard picker stays current.
+    const reality = await getModelReality("opencode");
+    if (reality) {
+      const present = new Set(models.map((m) => m.model));
+      const kept = models.filter((m) => (m.provider !== "oc" && m.provider !== "opencode") || reality.alive.has(m.model));
+      for (const id of reality.live) {
+        if (present.has(id)) continue;
+        const c = getCapabilitiesForModel("opencode", id);
+        kept.push({
+          provider: "oc",
+          model: id,
+          name: id,
+          fullModel: `oc/${id}`,
+          routedModel: `oc/${id}`,
+          alias: modelAliases[`oc/${id}`] || id,
+          caps: { vision: c.vision, search: c.search, reasoning: c.reasoning, contextWindow: c.contextWindow, maxOutput: c.maxOutput },
+        });
+      }
+      return NextResponse.json({ models: kept });
     }
 
     return NextResponse.json({ models });

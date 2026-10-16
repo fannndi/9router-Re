@@ -58,7 +58,9 @@ On this machine Node is not on `PATH`: prefix commands with
 - `open-sse/providers/capabilities.js` — capability/limit tables. Zen free-tier limits are
   pinned here (`zen-caps` phase) because the generic patterns mis-size them; `/v1/models`
   publishes them through the per-provider loop (the synthetic no-auth connections count as
-  connections).
+  connections). Upstream-owned model lists (registry `modelsFetcher`) are read live through
+  `src/lib/modelCatalog/liveModels.js` — cached, unioned with the models.dev copy — and feed
+  `/v1/models`, `/api/models` and the daily sync.
 - `open-sse/` — the SSE engine; see `open-sse/AGENTS.md`.
 - `open-sse/providers/registry/opencode.js` — the only provider entry.
 - `tests/` — vitest; see `tests/README.md` and `tests/translator/AGENTS.md`.

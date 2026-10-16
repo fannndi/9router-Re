@@ -9,7 +9,7 @@ const LIMITS = [
   ["step-5-preview-free", 1000000, 65536],
   ["nemotron-3.5-super-vl-free", 1048576, 131072],
   ["nemotron-3.5-lightning-free", 262144, 262144],
-  ["cat-jam-free", 262144, 131072],
+  ["cat-jam-free", 1048576, 131072],
   ["mimo-v2.6-flash-free", 200000, 32000],
   ["deepseek-v4.1-flash-free", 200000, 32000],
   ["big-pickle", 200000, 32000],

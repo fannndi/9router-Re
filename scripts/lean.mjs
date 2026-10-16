@@ -4372,7 +4372,7 @@ PHASES["pool-usage"] = {
 //     virtual no-auth connection), so /v1/models took the "DB unavailable"
 //     static branch and never emitted context_length/max_completion_tokens
 PHASES["zen-caps"] = {
-  title: "OpenCode Free limits: pin models.dev numbers + publish them on /v1/models",
+  title: "OpenCode Free: pinned limits + live model list + /v1/models publishing",
   patch: [
     {
       file: "open-sse/providers/capabilities.js",
@@ -4386,11 +4386,19 @@ PHASES["zen-caps"] = {
   "step-5-preview-free":          { reasoning: true, thinkingFormat: "step", contextWindow: 1000000, maxOutput: 65536 },
   "nemotron-3.5-super-vl-free":   { vision: true, reasoning: true, contextWindow: 1048576, maxOutput: 131072 },
   "nemotron-3.5-lightning-free":  { reasoning: true, contextWindow: 262144, maxOutput: 262144 },
-  "cat-jam-free":                 { contextWindow: 262144, maxOutput: 131072 },
+  "cat-jam-free":                 { contextWindow: 1048576, maxOutput: 131072 },
   "mimo-v2.6-flash-free":         { vision: true, audioInput: true, videoInput: true, reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 200000, maxOutput: 32000 },
   "deepseek-v4.1-flash-free":     { vision: true, reasoning: true, thinkingFormat: "deepseek", thinkingEffortSupported: true, contextWindow: 200000, maxOutput: 32000 },
 `,
       check: `"step-5-preview-free":          { reasoning: true`,
+    },
+    {
+      // models.dev corrected cat-jam-free to 1M after the first pin (caught live
+      // by the extended sync); keep the table in step so fresh installs agree.
+      file: "open-sse/providers/capabilities.js",
+      find: `  "cat-jam-free":                 { contextWindow: 262144, maxOutput: 131072 },`,
+      replace: `  "cat-jam-free":                 { contextWindow: 1048576, maxOutput: 131072 },`,
+      check: `"cat-jam-free":                 { contextWindow: 1048576`,
     },
     {
       file: "src/app/api/v1/models/route.js",
@@ -4404,6 +4412,120 @@ PHASES["zen-caps"] = {
   if (activeConnectionByProvider.size === 0) {
     // DB unavailable -> return static models, filtered by per-model kind`,
       check: `if (activeConnectionByProvider.size === 0) {`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";\n`,
+      replace: `import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";\nimport { getModelReality } from "@/lib/modelCatalog/liveModels.js";\n`,
+      check: `import { getModelReality } from "@/lib/modelCatalog/liveModels.js";`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `      const mergedModelIds = Array.from(new Set([...modelIds, ...customModelIds, ...aliasModelIds]));
+
+      for (const modelId of mergedModelIds) {`,
+      replace: `      const mergedModelIds = Array.from(new Set([...modelIds, ...customModelIds, ...aliasModelIds]));
+
+      // zen-caps: the upstream owns this catalogue (modelsFetcher). Hide ids it
+      // no longer lists (union-alpha was retired) and surface new live free ids
+      // without dashboard clicks (jev-1.13-free), while the models.dev copy keeps
+      // ids that are only temporarily missing from the live list (step-5).
+      const reality = await getModelReality(providerId);
+      const listedModelIds = reality
+        ? [
+            ...mergedModelIds.filter((id) => reality.alive.has(id)),
+            ...reality.live.filter((id) => !mergedModelIds.includes(id)),
+          ]
+        : mergedModelIds;
+
+      for (const modelId of listedModelIds) {`,
+      check: `const listedModelIds = reality`,
+    },
+    {
+      file: "src/app/api/models/route.js",
+      find: `import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";\n`,
+      replace: `import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";\nimport { getModelReality } from "@/lib/modelCatalog/liveModels.js";\n`,
+      check: `import { getModelReality } from "@/lib/modelCatalog/liveModels.js";`,
+    },
+    {
+      file: "src/app/api/models/route.js",
+      find: `    return NextResponse.json({ models });
+  } catch (error) {
+    console.log("Error fetching models:", error);`,
+      replace: `    // zen-caps: upstream-owned catalogue — hide retired ids (union-alpha) and
+    // surface new live free ids so the dashboard picker stays current.
+    const reality = await getModelReality("opencode");
+    if (reality) {
+      const present = new Set(models.map((m) => m.model));
+      const kept = models.filter((m) => (m.provider !== "oc" && m.provider !== "opencode") || reality.alive.has(m.model));
+      for (const id of reality.live) {
+        if (present.has(id)) continue;
+        const c = getCapabilitiesForModel("opencode", id);
+        kept.push({
+          provider: "oc",
+          model: id,
+          name: id,
+          fullModel: \`oc/\${id}\`,
+          routedModel: \`oc/\${id}\`,
+          alias: modelAliases[\`oc/\${id}\`] || id,
+          caps: { vision: c.vision, search: c.search, reasoning: c.reasoning, contextWindow: c.contextWindow, maxOutput: c.maxOutput },
+        });
+      }
+      return NextResponse.json({ models: kept });
+    }
+
+    return NextResponse.json({ models });
+  } catch (error) {
+    console.log("Error fetching models:", error);`,
+      check: `const reality = await getModelReality("opencode");`,
+    },
+    {
+      file: "src/lib/modelCatalog/sync.js",
+      find: `  const entries = [];
+  for (const provider of registry) {
+    for (const model of provider.models || []) {
+      entries.push({
+        provider: provider.id,
+        model: model.id,
+        contextLength: model.contextLength,
+        current: getCapabilitiesForModel(provider.id, model.id),
+      });
+    }
+  }
+  return entries;
+}`,
+      replace: `  const entries = [];
+  const seen = new Set();
+  const addEntry = (provider, model, contextLength) => {
+    const key = \`\${provider}|\${model}\`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({
+      provider,
+      model,
+      contextLength,
+      current: getCapabilitiesForModel(provider, model),
+    });
+  };
+  for (const provider of registry) {
+    for (const model of provider.models || []) {
+      addEntry(provider.id, model.id, model.contextLength);
+    }
+  }
+  // zen-caps: providers that own their catalogue upstream (modelsFetcher) only
+  // name a few models in the registry. Include the live list and the models.dev
+  // copy so every servable id gets its delta evaluated — otherwise those limits
+  // never refresh and stay hand-pinned forever.
+  const { getLiveModelIds, getCatalogRawModelIds } = await import("./liveModels.js");
+  for (const provider of registry) {
+    if (!provider.modelsFetcher) continue;
+    const live = (await getLiveModelIds(provider.id, { ttlMs: 0 })) || [];
+    const ids = new Set([...live, ...getCatalogRawModelIds(provider.id, { freeOnly: true })]);
+    for (const id of ids) addEntry(provider.id, id, undefined);
+  }
+  return entries;
+}`,
+      check: `const addEntry = (provider, model, contextLength) =>`,
     },
   ],
 };
