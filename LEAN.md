@@ -29,6 +29,7 @@ Phases, in apply order: `updater`, `cli-tools`, `media`, `usage-quota`, `token-s
 | API keys, provider connections, dashboard password login | `/dashboard/endpoint`, `/api/keys`, `/api/providers` |
 | Console Log (live server output, **with per-request pool attribution**) | `/dashboard/console-log`, `/api/console-log*` |
 | Usage page (attempt-level pool/token stats, fail rates per model) | `/dashboard/pool-usage`, `/api/usage-stats`, `src/lib/usageStats.js` |
+| Model health probes (keep quiet-but-alive ids, hide only confirmed-dead) + hourly config refresh timer | `src/lib/modelCatalog/healthCheck.js`, `src/lib/db/repos/modelHealthRepo.js`, `/api/model-health`, `mobile-pool/9router-models-refresh.*` |
 | Pool chains: `direct → pools` failover (ordered) or round-robin, per-pool+model cooldowns, in-request walk on 429/5xx | `src/lib/network/connectionProxy.js` (`buildPoolPlan`), `src/sse/handlers/chat.js` |
 | "Check setup" diagnostics for a pool (tether, policy route, proxy, exit IP, service) | `/dashboard/proxy-pools` → row button, `/api/proxy-pools/[id]/diagnose` |
 | Client-format translation that can actually occur: `openai`, `claude`, `gemini`, `openai-responses`, Ollama-compat (`/v1/api/chat`) | `open-sse/translator/` |
@@ -161,6 +162,39 @@ of being silently rerouted. The proxy-pool round-robin (the long-session part) i
 > own `002`, renumber ours (and its entry in `migrations/index.js`) so `latestVersion()`
 > stays monotonic.
 
+### The `model-health` phase (liveness probes)
+
+Catalogues are not health checks. `step-5-preview-free` proves both directions: Zen's live
+list and the harness catalog dropped it (upstream marks it `status: "deprecated"`) while it
+still answers; conversely a listed model can die while both catalogues carry it. This phase
+measures instead of guessing:
+
+- **Probe set** — every id we could list (registry + dashboard custom models for `oc`) that
+  is NOT in the live list, plus every id with a health row (hidden ones included). Live ids
+  are trusted → near-zero probe cost for the normal case (today: one id, ~24 requests/day).
+- **Probe** — one minimal non-stream chat through the gateway itself (`max_tokens: 16`,
+  `x-9r-probe: 1`), so the real per-model transport and pool chain run; the marker keeps the
+  row out of `usageHistory`/Usage.
+- **Verdicts** — `200` = alive (strikes reset, unhidden); `400/404` + `model is unavailable`
+  / `model not found` / `unknown model` / `does not exist` = candidate gone, confirmed only
+  when a canary probe of a live-listed model also answers `200` (otherwise `unverified`);
+  `429`/`5xx`/timeouts = inconclusive, streak untouched. Real traffic that fails with
+  `400/404` schedules a probe instead of striking on one failure.
+- **Hide/unhide** — `MODEL_HEALTH_STRIKES` (default 10) consecutive confirmed-gone probes
+  hide the id from `/v1/models` + `/api/models` (and the hourly refresh drops it from
+  `opencode.jsonc`); any later `200` or live-list reappearance unhides it. A model that
+  answers is kept even when absent from every catalogue.
+- **Cadence** — baseline 1h; 30m once a model has 3 strikes; 15m at 7+ (verification speeds
+  up as evidence piles up; the decision itself never changes). `MODEL_HEALTH=off` disables
+  the loop.
+- **Prune** — a full pass drops rows whose id left the candidate universe (custom model
+  deleted, registry entry gone) and is not live; targeted `?model=` runs never prune.
+- **State** — kv scope `modelHealth` (`src/lib/db/repos/modelHealthRepo.js`), no migration;
+  visible via `GET /api/model-health`, `POST /api/model-health/check`, the **Model health**
+  table on `/dashboard/pool-usage`, and `[HEALTH]` lines in the Console Log.
+- **Config loop** — `9router-models-refresh.timer` (systemd user, hourly) runs
+  `mobile-pool/refresh-opencode-models.mjs`: new ids in, hidden ids out, `.bak` kept.
+
 **Overlays.** Ten files are deliberate fork rewrites rather than edits, so they live in
 full under `scripts/lean/overlays/` and the phase copies them over verbatim:
 `providers/[id]/page.js`, `AddApiKeyModal.js`, `ConnectionRow.js`, `providers/[id]/models/route.js`,
@@ -219,6 +253,8 @@ file to `scripts/lean/overlays/` if the fork owns it outright. Re-run `verify`/`
   `direct → pools` on 429).
 - Check setup: Proxy Pools → row button → every check green (mobile) / exit-IP warn is expected
   for `Local (host)`.
+- Model health: `POST /api/model-health/check` → `step-5-preview-free` reports `alive`;
+  `systemctl --user list-timers 9router-models-refresh.timer` → hourly refresh armed.
 - Chat smoke (pick a live id):
   `curl -s -X POST localhost:20128/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{"model":"oc/space-bunny-free","messages":[{"role":"user","content":"hi"}],"stream":false}'`
 - 429 failover: `~/Gateway/mobile-pool/e2e-local.sh` (mock 429 → pool retry).

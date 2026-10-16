@@ -114,7 +114,7 @@ export function formatDoneLine({ usage, latency }) {
   return `DONE ${latency?.total ?? 0}ms${ttftStr} · ${inStr} · OUT ${outTok}`;
 }
 
-export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, pool = null, label = "USAGE", silent = false }) {
+export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, pool = null, probe = false, label = "USAGE", silent = false }) {
   if (!tokens || typeof tokens !== "object") return;
 
   const inTokens = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
@@ -129,5 +129,5 @@ export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, 
   }
 
   // Fork-owned: persist one row per successful upstream call with the serving pool.
-  recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens });
+  recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens, probe });
 }

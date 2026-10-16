@@ -10,5 +10,10 @@ export async function register() {
 
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    // model-health: hourly liveness probes for listed ids the Zen live list does
+    // not cover (see healthCheck.js; MODEL_HEALTH=off disables).
+    const { startModelHealthCheck } = await import("@/lib/modelCatalog/healthCheck.js");
+    startModelHealthCheck();
   }
 }

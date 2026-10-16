@@ -21,6 +21,7 @@ import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess } from "../services/keyAccess.js";
 import { noteProxyPoolFailure, noteProxyPoolSuccess, buildPoolPlan, getPoolName, DIRECT_POOL_KEY } from "@/lib/network/connectionProxy";
 import { recordUsageEvent } from "@/lib/usageStats.js";
+import { markModelSuspect } from "@/lib/modelCatalog/healthCheck.js";
 
 /**
  * Retry-After of a failed upstream response, in milliseconds (0 when absent).
@@ -65,6 +66,8 @@ export async function handleChat(request, clientRawRequest = null) {
       headers: Object.fromEntries(request.headers.entries())
     };
   }
+  // model-health: probes are marked so they never show up as Usage rows.
+  if (request?.headers?.get("x-9r-probe") === "1") clientRawRequest._probe = true;
   // Claude Code marks a 1M-context request as `<model>[1m]`; the marker matches
   // no alias or provider/model pair, so it must not reach resolution.
   // The capability travels in the anthropic-beta header, forwarded as-is.
@@ -228,7 +231,13 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         poolKey: credentials._poolFailover?.key || null,
         reason: result.status ? String(result.status) : "transport",
         endpoint: clientRawRequest?.endpoint || null,
+        probe: clientRawRequest?._probe === true,
       });
+      // model-health: a 400/404 is only a suspicion — request a probe (with
+      // canary confirmation) instead of judging the model on one failure.
+      if (!clientRawRequest?._probe && (result.status === 400 || result.status === 404)) {
+        markModelSuspect(provider, model);
+      }
     }
 
     if (result.success) {

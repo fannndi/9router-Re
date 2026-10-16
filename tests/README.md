@@ -40,6 +40,7 @@ deployment — on this fork that means the OpenCode Free connection).
 | Usage stats: recorder + aggregation (pool slices, fail reasons, ranges, retention) | `unit/usage-stats` |
 | OpenCode Free (Zen) limits pinned (`zen-caps`) | `unit/zen-model-limits` |
 | Live upstream model list + models.dev second opinion (`zen-caps`) | `unit/zen-live-models` |
+| Model health probes (verdicts, canary, hide/unhide, listing merge) | `unit/model-health` |
 | Build/asset plumbing | `unit/standalone-assets` |
 
 Suites for removed surface (provider registries, media endpoints, token savers, usage/quota,

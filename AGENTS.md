@@ -54,6 +54,11 @@ On this machine Node is not on `PATH`: prefix commands with
   row per upstream call in `usageHistory` (tokens + serving pool; fail rows carry a reason),
   read by the **Usage** page (`/dashboard/pool-usage`). Hooks: `saveUsageStats()`
   (requestDetail, token rows) and the chat loop's `!result.success` branch.
+- `src/lib/modelCatalog/healthCheck.js` + `src/lib/db/repos/modelHealthRepo.js` +
+  `/api/model-health` — liveness probes for listed ids outside the live list; hidden only
+  after 10 consecutive confirmed-gone probes (each canary-checked); started from
+  `instrumentation.js` next to the catalog sync (`MODEL_HEALTH=off` turns it off). The
+  hourly `9router-models-refresh.timer` re-syncs `opencode.jsonc` from `/v1/models`.
 - `open-sse/providers/capabilities.js` — capability/limit tables. Zen free-tier limits are
   pinned here (`zen-caps` phase) because the generic patterns mis-size them; `/v1/models`
   publishes them through the per-provider loop (the synthetic no-auth connections count as
@@ -78,4 +83,5 @@ On this machine Node is not on `PATH`: prefix commands with
   `✔ POOL:"<b>" served the request after N failed attempt(s)`.
 - Docs are English. Keep `LEAN.md` in sync when a phase changes.
 - After any engine change run: `audit` → `verify all` → `npm run build` → `vitest` → restart
-  the service → smoke test `/v1/models` and a chat request.
+  the service → smoke test `/v1/models`, a chat request, and `POST /api/model-health/check`
+  (`step-5-preview-free` must report `alive`).

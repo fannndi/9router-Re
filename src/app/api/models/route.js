@@ -5,6 +5,7 @@ import { AI_MODELS } from "@/shared/constants/config";
 import { getProviderAlias, ALIAS_TO_ID } from "@/shared/constants/providers";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
+import { getModelHealthFilter } from "@/lib/modelCatalog/healthCheck.js";
 
 // GET /api/models - Get models with aliases
 export async function GET() {
@@ -79,11 +80,16 @@ export async function GET() {
     // zen-caps: upstream-owned catalogue — hide retired ids (union-alpha) and
     // surface new live free ids so the dashboard picker stays current.
     const reality = await getModelReality("opencode");
-    if (reality) {
+    const health = await getModelHealthFilter("opencode");
+    if (reality || health.hidden.size || health.aliveExtras.length) {
+      const alive = new Set([...(reality?.alive ?? []), ...health.aliveExtras]);
       const present = new Set(models.map((m) => m.model));
-      const kept = models.filter((m) => (m.provider !== "oc" && m.provider !== "opencode") || reality.alive.has(m.model));
-      for (const id of reality.live) {
-        if (present.has(id)) continue;
+      const kept = models.filter((m) => {
+        if (m.provider !== "oc" && m.provider !== "opencode") return true;
+        return alive.has(m.model) && !health.hidden.has(m.model);
+      });
+      for (const id of [...(reality?.live ?? []), ...health.aliveExtras]) {
+        if (present.has(id) || health.hidden.has(id)) continue;
         const c = getCapabilitiesForModel("opencode", id);
         kept.push({
           provider: "oc",

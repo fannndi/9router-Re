@@ -15,6 +15,11 @@ A slimmed-down fork of [decolua/9router](https://github.com/decolua/9router) tha
    `Fail` percentages, token totals (input / cached / output — **no dollars**), per-model
    fail rate + reasons, and the latest requests with the pool that carried them
    (`/dashboard/pool-usage`).
+4. **Model health** — hourly liveness probes for models the live Zen catalogue does not
+   cover: an id that still answers is kept even after every catalogue drops it, and an id is
+   hidden only after 10 consecutive confirmed-gone answers (each confirmed against a canary
+   model so a platform outage never costs a model its place). An hourly systemd timer
+   re-syncs `opencode.jsonc` so new models appear and dead ones leave on their own.
 
 Everything else from upstream is gone: 137 other providers, media endpoints, the upstream
 usage/quota stack (the fork ships its own minimal Usage page instead), token savers, MITM,
@@ -105,7 +110,9 @@ key from **Endpoint & Key**. Every free `oc/*` model the gateway serves is liste
 pins its real window via `limit: { context, output }` (Zen free-tier values) because OpenCode
 falls back to its own `200k/32k` default for models that omit it. The list mirrors the
 gateway's live `/v1/models` — retired ids disappear, new Zen free models appear — and can be
-re-synced any time with `node ../mobile-pool/refresh-opencode-models.mjs`.
+re-synced any time with `node ../mobile-pool/refresh-opencode-models.mjs`; the same script
+runs hourly from `9router-models-refresh.timer` (systemd user unit, see
+`../mobile-pool/README.md`) so the config follows the gateway on its own.
 
 ```jsonc
 {
@@ -128,7 +135,7 @@ re-synced any time with `node ../mobile-pool/refresh-opencode-models.mjs`.
 | **Provider strategy** (Providers → OpenCode Free) | `Round-robin` (default here): the start pool alternates on every upstream call, a rate-limited pool falls through to the next, so both IPs share the free limits. `Failover on 429`: direct first, pools only on 429 (phone data stays idle until needed). `Random`: same as round-robin with a random start. |
 | **Proxy Pools** | pool entries with a **Failover order** (`Local (host)` → `127.0.0.1:8899`, `Mobile (phone tether)` → `127.0.0.1:8888`), plus the row **Check setup** button that verifies tether / policy route / proxy / exit IP without sudo |
 | **Console Log** | live server output with per-request pool attribution: `▶ … POOL:"Mobile (phone tether)" (2/2)`, `[PROXY] … pool="…" | url=…`, `⇄ POOL:"direct" UNAVAILABLE (429) → NEXT POOL "…"` |
-| **Usage** | attempt-level stats with **pool attribution** (one row per upstream call, incl. pool retries): donut `Pool Local` / `Pool Mobile` / `Fail` in %, totals (requests · input · cached · output tokens, no dollars), per-model fail rate + fail reasons, latest requests with their pool. Ranges: Today / 24h / 7D / 30D / 60D; data is pruned after 90 days. |
+| **Usage** | attempt-level stats with **pool attribution** (one row per upstream call, incl. pool retries): donut `Pool Local` / `Pool Mobile` / `Fail` in %, totals (requests · input · cached · output tokens, no dollars), per-model fail rate + fail reasons, latest requests with their pool. Ranges: Today / 24h / 7D / 30D / 60D; data is pruned after 90 days. A **Model health** table below shows the probe state per model (strikes, hidden, last alive). |
 | **Settings** | password/login, routing strategy, outbound proxy, observability toggle, backup |
 
 ## Environment

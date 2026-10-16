@@ -259,10 +259,81 @@ function ModelsTable({ models, sort, onSort }) {
   );
 }
 
+const HEALTH_BADGES = {
+  alive: { label: "alive", cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/30" },
+  gone: { label: "gone", cls: "bg-amber-500/10 text-amber-500 border-amber-500/30" },
+  hidden: { label: "hidden", cls: "bg-red-500/10 text-red-400 border-red-500/30" },
+  unverified: { label: "unverified", cls: "bg-slate-500/10 text-slate-400 border-slate-500/30" },
+  rate_limited: { label: "rate limited", cls: "bg-sky-500/10 text-sky-500 border-sky-500/30" },
+  error: { label: "error", cls: "bg-slate-500/10 text-slate-400 border-slate-500/30" },
+  unknown: { label: "unknown", cls: "bg-slate-500/10 text-slate-400 border-slate-500/30" },
+};
+
+// Model health (model-health phase): probe state for ids the live Zen
+// catalogue does not cover. A model is hidden ONLY after `threshold`
+// consecutive confirmed-gone probes, with a canary model answering 200 at the
+// same time; a later success (or a live-list reappearance) unhides it.
+function HealthTable({ rows, threshold }) {
+  if (!rows.length) {
+    return (
+      <p className="py-6 text-center text-sm text-text-muted">
+        No probe history yet — the hourly check fills this in after the first run.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-[12px]">
+        <thead>
+          <tr className="text-[11px] uppercase tracking-wider text-text-muted">
+            <th className="py-1.5 pr-2 font-semibold">Model</th>
+            <th className="py-1.5 pr-2 font-semibold">Status</th>
+            <th className="py-1.5 pr-2 text-right font-semibold">Strikes</th>
+            <th className="py-1.5 pr-2 font-semibold">In live list</th>
+            <th className="py-1.5 pr-2 font-semibold">Last checked</th>
+            <th className="py-1.5 font-semibold">Last alive</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const badge = HEALTH_BADGES[row.status] || HEALTH_BADGES.unknown;
+            return (
+              <tr key={row.model} className="border-t border-border-subtle">
+                <td className="py-1.5 pr-2 whitespace-nowrap">
+                  <span className="text-text-muted">oc/</span>
+                  <span className="font-medium text-text-main">{row.model}</span>
+                </td>
+                <td className="py-1.5 pr-2">
+                  <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium", badge.cls)}>
+                    {badge.label}
+                  </span>
+                </td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">
+                  <span className={cn(row.strikes > 0 && "font-medium text-amber-500")}>
+                    {row.strikes}/{threshold}
+                  </span>
+                </td>
+                <td className="py-1.5 pr-2 text-text-muted">{row.inLive ? "yes" : "no"}</td>
+                <td className="py-1.5 pr-2 text-text-muted" title={row.lastCheckedAt ? new Date(row.lastCheckedAt).toLocaleString() : ""}>
+                  {row.lastCheckedAt ? timeAgo(row.lastCheckedAt) : "—"}
+                </td>
+                <td className="py-1.5 text-text-muted" title={row.lastAliveAt ? new Date(row.lastAliveAt).toLocaleString() : ""}>
+                  {row.lastAliveAt ? timeAgo(row.lastAliveAt) : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function PoolUsageClient() {
   const [range, setRange] = useState("24h");
   const [refreshKey, setRefreshKey] = useState(0);
   const [data, setData] = useState(null);
+  const [health, setHealth] = useState(null);
   const [error, setError] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [sort, setSort] = useState({ key: "attempts", dir: "desc" });
@@ -273,11 +344,16 @@ export default function PoolUsageClient() {
     let cancelled = false;
     const run = async () => {
       try {
-        const res = await fetch(`/api/usage-stats?range=${encodeURIComponent(range)}`, { cache: "no-store" });
+        const [res, healthRes] = await Promise.all([
+          fetch(`/api/usage-stats?range=${encodeURIComponent(range)}`, { cache: "no-store" }),
+          fetch("/api/model-health", { cache: "no-store" }),
+        ]);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
+        const healthJson = healthRes.ok ? await healthRes.json() : null;
         if (cancelled) return;
         setData(json);
+        setHealth(healthJson);
         setError(null);
         setUpdatedAt(new Date().toISOString());
       } catch (err) {
@@ -408,6 +484,16 @@ export default function PoolUsageClient() {
         padding="sm"
       >
         <ModelsTable models={models} sort={sort} onSort={handleSort} />
+      </Card>
+
+      {/* Model health */}
+      <Card
+        title="Model health"
+        subtitle="Probes for ids the live catalogue does not cover — hidden only after repeated confirmed-gone answers (canary-checked)"
+        icon="monitor_heart"
+        padding="sm"
+      >
+        <HealthTable rows={health?.models || []} threshold={health?.threshold || 10} />
       </Card>
     </div>
   );

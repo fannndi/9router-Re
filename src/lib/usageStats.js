@@ -86,6 +86,9 @@ function schedulePrune() {
  */
 export function recordUsageEvent(event = {}) {
   try {
+    // model-health probes are not user traffic: never counted in the Usage page.
+    if (event.probe === true) return Promise.resolve(false);
+
     const underTest = process.env.VITEST || process.env.NODE_ENV === "test";
     if (underTest && !process.env.DATA_DIR) return Promise.resolve(false);
 

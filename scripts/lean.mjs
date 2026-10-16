@@ -4059,7 +4059,7 @@ PHASES["pool-usage"] = {
       file: "open-sse/handlers/chatCore/requestDetail.js",
       find: `export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, label = "USAGE", silent = false }) {`,
       replace: `export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, pool = null, label = "USAGE", silent = false }) {`,
-      check: `pool = null, label = "USAGE"`,
+      check: `endpoint, pool = null`,
     },
     {
       file: "open-sse/handlers/chatCore/requestDetail.js",
@@ -4073,7 +4073,7 @@ PHASES["pool-usage"] = {
   // Fork-owned: persist one row per successful upstream call with the serving pool.
   recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens });
 }`,
-      check: `recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens });`,
+      check: `recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens`,
     },
 
     // ── handler call sites: forward the pool tag onto token rows
@@ -4081,13 +4081,13 @@ PHASES["pool-usage"] = {
       file: "open-sse/handlers/chatCore/streamingHandler.js",
       find: `    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE", silent: true });`,
       replace: `    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, pool: clientRawRequest?._poolName || null, label: "STREAM USAGE", silent: true });`,
-      check: `pool: clientRawRequest?._poolName || null, label: "STREAM USAGE"`,
+      check: `pool: clientRawRequest?._poolName || null,`
     },
     {
       file: "open-sse/handlers/chatCore/nonStreamingHandler.js",
       find: `  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });`,
       replace: `  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, pool: clientRawRequest?._poolName || null, silent: true });`,
-      check: `pool: clientRawRequest?._poolName || null, silent: true`,
+      check: `pool: clientRawRequest?._poolName || null,`
     },
     {
       // Two identical call sites (6-space and 4-space indent) → one rule.
@@ -4095,7 +4095,7 @@ PHASES["pool-usage"] = {
       find: `saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });`,
       replace: `saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, pool: clientRawRequest?._poolName || null, silent: true });`,
       allowMultiple: true,
-      check: `pool: clientRawRequest?._poolName || null, silent: true`,
+      check: `pool: clientRawRequest?._poolName || null,`
     },
 
     // ── chat.js: pool tag per attempt + one fail row per failed attempt
@@ -4248,7 +4248,7 @@ PHASES["zen-caps"] = {
         : mergedModelIds;
 
       for (const modelId of listedModelIds) {`,
-      check: `const listedModelIds = reality`,
+      check: `const reality = await getModelReality(providerId);`,
     },
     {
       file: "src/app/api/models/route.js",
@@ -5204,6 +5204,187 @@ export const KEY_ACCESS_COMBO_OWNER = "combo";
       find: `      // while still being valid chat/combo targets.`,
       replace: `      // while still being valid chat targets.`,
       check: `      // while still being valid chat targets.`,
+    },
+  ],
+};
+
+PHASES["model-health"] = {
+  title: "liveness probes: keep quiet-but-alive models, hide only confirmed-dead ones",
+  patch: [
+    // ── scheduler next to the catalog sync
+    {
+      file: "src/instrumentation.js",
+      find: `    const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
+    startModelCatalogSync();`,
+      replace: `    const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
+    startModelCatalogSync();
+
+    // model-health: hourly liveness probes for listed ids the Zen live list does
+    // not cover (see healthCheck.js; MODEL_HEALTH=off disables).
+    const { startModelHealthCheck } = await import("@/lib/modelCatalog/healthCheck.js");
+    startModelHealthCheck();`,
+      check: `const { startModelHealthCheck } = await import("@/lib/modelCatalog/healthCheck.js");`,
+    },
+    {
+      file: "src/dashboardGuard.js",
+      find: `  "/api/models",
+`,
+      replace: `  "/api/models",
+  "/api/model-health",
+`,
+      check: `  "/api/model-health",
+`,
+    },
+
+    // ── /v1/models: health-aware listing (hidden out, probe-alive orphans kept)
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
+`,
+      replace: `import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
+import { getModelHealthFilter, mergeListedIds } from "@/lib/modelCatalog/healthCheck.js";
+`,
+      check: `import { getModelHealthFilter, mergeListedIds } from "@/lib/modelCatalog/healthCheck.js";`,
+    },
+    {
+      file: "src/app/api/v1/models/route.js",
+      find: `      const reality = await getModelReality(providerId);
+      const listedModelIds = reality
+        ? [
+            ...mergedModelIds.filter((id) => reality.alive.has(id)),
+            ...reality.live.filter((id) => !mergedModelIds.includes(id)),
+          ]
+        : mergedModelIds;`,
+      replace: `      // model-health adds two signals: ids the probe confirmed gone are hidden,
+      // and ids the probe keeps confirming alive stay listed even after both
+      // catalogues dropped them (quiet upstreams stay useful).
+      const reality = await getModelReality(providerId);
+      const health = await getModelHealthFilter(providerId);
+      const listedModelIds = mergeListedIds({ mergedIds: mergedModelIds, reality, health });`,
+      check: `const listedModelIds = mergeListedIds({ mergedIds: mergedModelIds, reality, health });`,
+    },
+
+    // ── /api/models (dashboard picker): same hide/keep semantics
+    {
+      file: "src/app/api/models/route.js",
+      find: `import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
+`,
+      replace: `import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
+import { getModelHealthFilter } from "@/lib/modelCatalog/healthCheck.js";
+`,
+      check: `import { getModelHealthFilter } from "@/lib/modelCatalog/healthCheck.js";`,
+    },
+    {
+      file: "src/app/api/models/route.js",
+      find: `    const reality = await getModelReality("opencode");
+    if (reality) {
+      const present = new Set(models.map((m) => m.model));
+      const kept = models.filter((m) => (m.provider !== "oc" && m.provider !== "opencode") || reality.alive.has(m.model));
+      for (const id of reality.live) {
+        if (present.has(id)) continue;`,
+      replace: `    const reality = await getModelReality("opencode");
+    const health = await getModelHealthFilter("opencode");
+    if (reality || health.hidden.size || health.aliveExtras.length) {
+      const alive = new Set([...(reality?.alive ?? []), ...health.aliveExtras]);
+      const present = new Set(models.map((m) => m.model));
+      const kept = models.filter((m) => {
+        if (m.provider !== "oc" && m.provider !== "opencode") return true;
+        return alive.has(m.model) && !health.hidden.has(m.model);
+      });
+      for (const id of [...(reality?.live ?? []), ...health.aliveExtras]) {
+        if (present.has(id) || health.hidden.has(id)) continue;`,
+      check: `const health = await getModelHealthFilter("opencode");`,
+    },
+
+    // ── probe rows never pollute the Usage page
+    {
+      file: "src/lib/usageStats.js",
+      find: `export function recordUsageEvent(event = {}) {
+  try {
+    const underTest = process.env.VITEST || process.env.NODE_ENV === "test";`,
+      replace: `export function recordUsageEvent(event = {}) {
+  try {
+    // model-health probes are not user traffic: never counted in the Usage page.
+    if (event.probe === true) return Promise.resolve(false);
+
+    const underTest = process.env.VITEST || process.env.NODE_ENV === "test";`,
+      check: `    if (event.probe === true) return Promise.resolve(false);`,
+    },
+    {
+      file: "open-sse/handlers/chatCore/requestDetail.js",
+      find: `export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, pool = null, label = "USAGE", silent = false }) {`,
+      replace: `export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, pool = null, probe = false, label = "USAGE", silent = false }) {`,
+      check: `pool = null, probe = false, label = "USAGE"`,
+    },
+    {
+      file: "open-sse/handlers/chatCore/requestDetail.js",
+      find: `  recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens });`,
+      replace: `  recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens, probe });`,
+      check: `recordUsageEvent({ ok: true, provider, model, pool, connectionId, endpoint, tokens, probe });`,
+    },
+    {
+      file: "open-sse/handlers/chatCore/nonStreamingHandler.js",
+      find: `pool: clientRawRequest?._poolName || null, silent: true });`,
+      replace: `pool: clientRawRequest?._poolName || null, probe: clientRawRequest?._probe === true, silent: true });`,
+      check: `probe: clientRawRequest?._probe === true, silent: true });`,
+    },
+    {
+      file: "open-sse/handlers/chatCore/sseToJsonHandler.js",
+      find: `pool: clientRawRequest?._poolName || null, silent: true });`,
+      replace: `pool: clientRawRequest?._poolName || null, probe: clientRawRequest?._probe === true, silent: true });`,
+      check: `probe: clientRawRequest?._probe === true, silent: true });`,
+      allowMultiple: true,
+    },
+    {
+      file: "open-sse/handlers/chatCore/streamingHandler.js",
+      find: `pool: clientRawRequest?._poolName || null, label: "STREAM USAGE", silent: true });`,
+      replace: `pool: clientRawRequest?._poolName || null, probe: clientRawRequest?._probe === true, label: "STREAM USAGE", silent: true });`,
+      check: `probe: clientRawRequest?._probe === true, label: "STREAM USAGE"`,
+    },
+
+    // ── chat handler: probe marker + suspect hook on failed real traffic
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `import { recordUsageEvent } from "@/lib/usageStats.js";
+`,
+      replace: `import { recordUsageEvent } from "@/lib/usageStats.js";
+import { markModelSuspect } from "@/lib/modelCatalog/healthCheck.js";
+`,
+      check: `import { markModelSuspect } from "@/lib/modelCatalog/healthCheck.js";`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `      headers: Object.fromEntries(request.headers.entries())
+    };
+  }
+`,
+      replace: `      headers: Object.fromEntries(request.headers.entries())
+    };
+  }
+  // model-health: probes are marked so they never show up as Usage rows.
+  if (request?.headers?.get("x-9r-probe") === "1") clientRawRequest._probe = true;
+`,
+      check: `if (request?.headers?.get("x-9r-probe") === "1") clientRawRequest._probe = true;`,
+    },
+    {
+      file: "src/sse/handlers/chat.js",
+      find: `        reason: result.status ? String(result.status) : "transport",
+        endpoint: clientRawRequest?.endpoint || null,
+      });
+    }
+`,
+      replace: `        reason: result.status ? String(result.status) : "transport",
+        endpoint: clientRawRequest?.endpoint || null,
+        probe: clientRawRequest?._probe === true,
+      });
+      // model-health: a 400/404 is only a suspicion — request a probe (with
+      // canary confirmation) instead of judging the model on one failure.
+      if (!clientRawRequest?._probe && (result.status === 400 || result.status === 404)) {
+        markModelSuspect(provider, model);
+      }
+    }
+`,
+      check: `markModelSuspect(provider, model);`,
     },
   ],
 };

@@ -12,6 +12,7 @@ import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 import { getModelReality } from "@/lib/modelCatalog/liveModels.js";
+import { getModelHealthFilter, mergeListedIds } from "@/lib/modelCatalog/healthCheck.js";
 
 // UI aliases vs the model registry's transport aliases; capability overrides
 // and catalog limits are keyed by provider id.
@@ -324,13 +325,12 @@ export async function buildModelsList(kindFilter, options = {}) {
       // no longer lists (union-alpha was retired) and surface new live free ids
       // without dashboard clicks (jev-1.13-free), while the models.dev copy keeps
       // ids that are only temporarily missing from the live list (step-5).
+      // model-health adds two signals: ids the probe confirmed gone are hidden,
+      // and ids the probe keeps confirming alive stay listed even after both
+      // catalogues dropped them (quiet upstreams stay useful).
       const reality = await getModelReality(providerId);
-      const listedModelIds = reality
-        ? [
-            ...mergedModelIds.filter((id) => reality.alive.has(id)),
-            ...reality.live.filter((id) => !mergedModelIds.includes(id)),
-          ]
-        : mergedModelIds;
+      const health = await getModelHealthFilter(providerId);
+      const listedModelIds = mergeListedIds({ mergedIds: mergedModelIds, reality, health });
 
       for (const modelId of listedModelIds) {
         // Resolve kind: prefer custom/live metadata, then static, then ID heuristics.
